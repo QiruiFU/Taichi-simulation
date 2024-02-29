@@ -2,19 +2,19 @@ import taichi as ti
 import taichi.math as tm
 import math
 
-ti.init(arch=ti.cpu)
+ti.init(arch=ti.gpu)
 
-n = 500
+n = 5000
 phase = 2
 h = 1.1
 g = ti.Vector.field(2, float, shape=1)
 damp = 0.999
 tao = 1e-4
 
-miscible = True
+miscible = False
 
-boundX = 40.0
-boundY = 40.0
+boundX = 40.0 * ti.sqrt(5.0)
+boundY = 40.0 * ti.sqrt(5.0)
 
 frame = 100
 substep = 10
@@ -45,6 +45,9 @@ ParNum = ti.field(int, shape = int(numCell))
 Particles = ti.field(int, shape = (n, n))
 NeiNum = ti.field(int, shape = n)
 neighbor = ti.field(int, shape = (n, n))
+
+# rendering
+palette = ti.field(int, shape = n)
 
 
 @ti.func
@@ -272,6 +275,14 @@ def advect():
         vel[i] += dt * acc[i]
         pos[i] += dt * vel[i]
         boundry(i)
+
+
+@ti.kernel
+def pre_render():
+    for i in pos:
+        clr = int(alpha[i, 0] * 0xFF) * 0x010000 + int(alpha[i, 1] * 0xFF) * 0x000100
+        palette[i] = clr
+
     
 if __name__ == '__main__':
     init()
@@ -297,11 +308,10 @@ if __name__ == '__main__':
             cal_acc()
             advect()
         
+        pre_render()
         pos_show = pos.to_numpy()
         pos_show[:, 0] *= 1.0 / boundX
         pos_show[:, 1] *= 1.0 / boundY
-        for i in range(n):
-            clr = int(alpha[i, 0] * 0xFF) * 0x010000 + int(alpha[i, 1] * 0xFF) * 0x000100
-            gui.circle(pos_show[i], color=clr, radius=3)
+        gui.circles(pos_show, radius=3, palette=palette.to_numpy(), palette_indices=[i for i in range(n)])
         gui.show()
     
