@@ -47,6 +47,9 @@ Particles = ti.field(int, shape = (n, n))
 NeiNum = ti.field(int, shape = n)
 neighbor = ti.field(int, shape = (n, n))
 
+# rendering
+palette = ti.field(int, shape = n)
+
 
 @ti.func
 def W(r) -> float:
@@ -275,7 +278,15 @@ def advect():
         vel[i] += dt * acc[i]
         pos[i] += dt * vel[i]
         boundry(i)
-    
+
+
+@ti.kernel
+def pre_render():
+    for i in pos:
+        clr = int(alpha[i, 0] * 0xFF) * 0x010000 + int(alpha[i, 1] * 0xFF) * 0x000100
+        palette[i] = clr
+        
+
 if __name__ == '__main__':
     init()
     gui = ti.GUI('SPH', res = (500, 500))
@@ -300,11 +311,10 @@ if __name__ == '__main__':
             cal_acc()
             advect()
         
+        pre_render()
         pos_show = pos.to_numpy()
         pos_show[:, 0] *= 1.0 / boundX
         pos_show[:, 1] *= 1.0 / boundY
-        for i in range(n):
-            clr = int(alpha[i, 0] * 0xFF) * 0x010000 + int(alpha[i, 1] * 0xFF) * 0x000100
-            gui.circle(pos_show[i], color=clr, radius=3)
+        gui.circles(pos_show, radius=3, palette=palette.to_numpy(), palette_indices=[i for i in range(n)])
         gui.show()
     
