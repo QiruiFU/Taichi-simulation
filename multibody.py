@@ -1,5 +1,5 @@
 import taichi as ti
-ti.init(ti.cpu)
+ti.init(ti.gpu)
 
 G = 0.001
 N = 4
