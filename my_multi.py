@@ -1,8 +1,10 @@
 import taichi as ti
 import taichi.math as tm
+import numpy as np
 import math
 
 ti.init(arch=ti.gpu)
+show_type = 0
 
 # boundary
 boundX = 25.0 * ti.sqrt(10.0)
@@ -16,18 +18,16 @@ wallNum = wallNumX * 3 + (wallNumY - 3) * 6
 fluid_n = 5000
 total_num = fluid_n + wallNum
 phase = 2
-h = 1.1
+h = 1.2
 g = ti.Vector.field(2, float, shape=1)
-damp = 0.999
+damp = 0.9993
 tao = 1e-4
 
 miscible = False
 
-frame = 100
-substep = 10
+frame = 60
+substep = 20
 
-k1 = 0.5
-k2 = 7.0
 k3 = 40.0
 
 dt = 1.0 / (frame*substep)
@@ -55,7 +55,10 @@ neighbor = ti.field(int, shape = (fluid_n, total_num))
 
 # rendering
 palette = ti.field(int, shape = total_num)
-
+pos_p0 = ti.Vector.field(3, float, shape=total_num)
+pos_p1 = ti.Vector.field(3, float, shape=total_num)
+cnt_p0 = ti.field(int, shape=())
+cnt_p1 = ti.field(int, shape=())
 
 @ti.func
 def W(r) -> float:
@@ -311,26 +314,42 @@ def advect():
 def pre_render():
     for i in pos:
         if i < fluid_n:
-            clr = int(alpha[i, 0] * 0xFF) * 0x010000 + int(alpha[i, 1] * 0xFF) * 0x000100
-            palette[i] = clr
+            if show_type == 0:
+                clr = int(alpha[i, 0] * 0xFF) * 0x010000 + int(alpha[i, 1] * 0xFF) * 0x000100
+                palette[i] = clr
+            elif show_type == 1 :
+                ext = (prs[i] + 50) / 400
+                clr = int(ext * 0xFF) * 0x010000 + int((1-ext) * 0xFF) * 0x000001
+                palette[i] = clr
         else:
             palette[i] = 0xFFFFFF
 
+
+@ti.kernel
+def classify_pos():
+    cnt_p0[None] = 0
+    cnt_p1[None] = 0
+    pos_p0.fill(0)
+    pos_p1.fill(0)
+
+    for i in vel:
+        if alpha[i, 0] > 0.5:
+            temp0 = ti.atomic_add(cnt_p0[None], 1)
+            pos_p0[temp0][0] = pos[i][0]
+            pos_p0[temp0][1] = pos[i][1]
+            pos_p0[temp0][2] = 0.0
+        else:
+            temp1 = ti.atomic_add(cnt_p1[None], 1)
+            pos_p1[temp1][0] = pos[i][0]
+            pos_p1[temp1][1] = pos[i][1]
+            pos_p1[temp1][2] = 0.0
     
+
 if __name__ == '__main__':
     init()
+    cur_frame = 0
     gui = ti.GUI('SPH', res = (500, 800))
     while gui.running:
-        gui.get_event()
-        if gui.is_pressed('w'):
-            g[0] = ti.Vector([0, 9.8])
-        elif gui.is_pressed('s'):
-            g[0] = ti.Vector([0, -9.8])
-        elif gui.is_pressed('a'):
-            g[0] = ti.Vector([-9.8, 0])
-        elif gui.is_pressed('d'):
-            g[0] = ti.Vector([9.8, 0])
-
         for _ in range(substep):
             neighbor_search()
             cal_press()
@@ -339,16 +358,34 @@ if __name__ == '__main__':
             check_alpha()
             cal_acc()
             advect()
-        
-        pre_render()
-        pos_show = pos.to_numpy()
-        palette_show = palette.to_numpy()
-        pos_show[:, 0] *= 1.0 / boundX
-        pos_show[:, 1] *= 1.0 / boundY
-        roll = math.ceil(total_num / 255)
-        for i in range(roll): # you can render up to 255 circles at one time
-            left = i * 255
-            right = min(total_num, (i+1)*255)
-            gui.circles(pos_show[left:right, :], radius=3, palette=palette_show[left:right], palette_indices=[i for i in range(right-left)])
-        gui.show()
+
+        classify_pos()
+
+        series_prefix = "out/plyfile/phase0_.ply"
+        np_pos_0 = pos_p0.to_numpy()
+        writer0 = ti.tools.PLYWriter(num_vertices = cnt_p0[None])
+        writer0.add_vertex_pos(np_pos_0[0:cnt_p0[None], 0], np_pos_0[0:cnt_p0[None], 1], np_pos_0[0:cnt_p0[None], 2])
+        writer0.export_frame_ascii(cur_frame, series_prefix)
+
+        series_prefix = "out/plyfile/phase1_.ply"
+        np_pos_1 = pos_p1.to_numpy()
+        writer1 = ti.tools.PLYWriter(num_vertices = cnt_p1[None])
+        writer1.add_vertex_pos(np_pos_1[0:cnt_p1[None], 0], np_pos_1[0:cnt_p1[None], 1], np_pos_1[0:cnt_p1[None], 2])
+        writer1.export_frame_ascii(cur_frame, series_prefix)
+
+        cur_frame += 1
+        if cur_frame == 2400 :
+            exit()
+
+        # pre_render()
+        # pos_show = pos.to_numpy()
+        # palette_show = palette.to_numpy()
+        # pos_show[:, 0] *= 1.0 / boundX
+        # pos_show[:, 1] *= 1.0 / boundY
+        # roll = math.ceil(total_num / 255)
+        # for i in range(roll): # you can render up to 255 circles at one time
+        #     left = i * 255
+        #     right = min(total_num, (i+1)*255)
+        #     gui.circles(pos_show[left:right, :], radius=3, palette=palette_show[left:right], palette_indices=[i for i in range(right-left)])
+        # gui.show()
     

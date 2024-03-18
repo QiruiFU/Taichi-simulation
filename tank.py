@@ -5,15 +5,16 @@ import math
 ti.init(arch=ti.gpu)
 
 # boundary
-boundX = 25.0 * ti.sqrt(10.0)
-boundY = 40.0 * ti.sqrt(10.0)
+boundX = 50.0
+boundY = 100.0
 
 # Wall
-wallNumX = int(boundX // 0.5) - 5
-wallNumY = int(boundY // 0.5) - 5
+wallNumX = int(boundX // 0.4) - 5
+wallNumY = int(boundY // 0.4) - 5
 wallNum = wallNumX * 3 + (wallNumY - 3) * 6
 
-fluid_n = 5000
+cur_n = ti.field(int, shape=())
+fluid_n = 10000
 total_num = fluid_n + wallNum
 phase = 1
 h = 1.1
@@ -106,12 +107,12 @@ def neighbor_search():
     Particles.fill(0)
     neighbor.fill(0)
 
-    for i in pos:
+    for i in range(wallNum+cur_n[None]):
         idx = int(pos[i][0]/cellSize-0.5) + int(pos[i][1]/cellSize-0.5) * numCellX
         k = ti.atomic_add(ParNum[int(idx)], 1)
         Particles[int(idx), k] = i
 
-    for i in range(total_num):
+    for i in range(wallNum+cur_n[None]):
         idx_x = int(pos[i][0]/cellSize - 0.5)
         idx_y = int(pos[i][1]/cellSize - 0.5)
         kk = 0
@@ -155,17 +156,17 @@ def init():
     #     alpha[i, 1] = 1.0
     
     for i in range(wallNumX):
-        pos[3*i] = ti.Vector([(i+1) * 0.5, 0.5])
-        pos[3*i+1] = ti.Vector([(i+1) * 0.5, 1.0])
-        pos[3*i+2] = ti.Vector([(i+1) * 0.5, 1.5])
+        pos[3*i] = ti.Vector([(i+1) * 0.4, 0.4])
+        pos[3*i+1] = ti.Vector([(i+1) * 0.4, 0.8])
+        pos[3*i+2] = ti.Vector([(i+1) * 0.4, 1.2])
     
     for i in range(wallNumY-3):
-        pos[wallNumX*3+6*i] = ti.Vector([0.5, (i+4) * 0.5])
-        pos[wallNumX*3+6*i+1] = ti.Vector([1.0, (i+4) * 0.5])
-        pos[wallNumX*3+6*i+2] = ti.Vector([1.5, (i+4) * 0.5])
-        pos[wallNumX*3+6*i+3] = ti.Vector([(wallNumX-2)*0.5, (i+4) * 0.5])
-        pos[wallNumX*3+6*i+4] = ti.Vector([(wallNumX-1)*0.5, (i+4) * 0.5])
-        pos[wallNumX*3+6*i+5] = ti.Vector([(wallNumX-0)*0.5, (i+4) * 0.5])
+        pos[wallNumX*3+6*i] = ti.Vector([0.4, (i+4) * 0.4])
+        pos[wallNumX*3+6*i+1] = ti.Vector([0.8, (i+4) * 0.4])
+        pos[wallNumX*3+6*i+2] = ti.Vector([1.2, (i+4) * 0.4])
+        pos[wallNumX*3+6*i+3] = ti.Vector([(wallNumX-2)*0.4, (i+4) * 0.4])
+        pos[wallNumX*3+6*i+4] = ti.Vector([(wallNumX-1)*0.4, (i+4) * 0.4])
+        pos[wallNumX*3+6*i+5] = ti.Vector([(wallNumX-0)*0.4, (i+4) * 0.4])
 
 
 @ti.kernel
@@ -317,17 +318,16 @@ def pre_render():
             palette[i] = 0xFFFFFF
 
 
-cur_n = 0
-
 if __name__ == '__main__':
     init()
-    gui = ti.GUI('SPH', res = (500, 800))
+    cur_frame = 0
+    gui = ti.GUI('SPH', res = (400, 800))
     while gui.running:
         
-        if cur_n < fluid_n :
-            cur_n += 5
-            for idx in range(cur_n-5, cur_n):
-                pos[wallNum+idx] = ti.Vector([0.05 * boundX, 0.8 * boundY + (cur_n - idx) * 0.65])
+        if cur_n[None] < fluid_n :
+            cur_n[None] += 5
+            for idx in range(cur_n[None]-5, cur_n[None]):
+                pos[wallNum+idx] = ti.Vector([0.05 * boundX, 0.8 * boundY + (cur_n[None] - idx) * 0.65])
                 vel[wallNum+idx] = ti.Vector([40.0, 0.0])
                 alpha[wallNum+idx, 0] = 1.0
         
@@ -339,16 +339,23 @@ if __name__ == '__main__':
             check_alpha()
             cal_acc()
             advect()
-        
-        pre_render()
-        pos_show = pos.to_numpy()
-        palette_show = palette.to_numpy()
-        pos_show[:, 0] *= 1.0 / boundX
-        pos_show[:, 1] *= 1.0 / boundY
-        roll = math.ceil((cur_n + wallNum) / 255)
-        for i in range(roll): # you can render up to 255 circles at one time
-            left = i * 255
-            right = min(cur_n + wallNum, (i+1)*255)
-            gui.circles(pos_show[left:right, :], radius=3, palette=palette_show[left:right], palette_indices=[i for i in range(right-left)])
-        gui.show()
+
+        f = open(f"out/jsonfile/water_{cur_frame}.json", "w")
+        f.write("[\n")
+        for i in range(wallNum, wallNum+cur_n[None]-1):
+            f.write(f"[{pos[i][0]}, {pos[i][1]}, 0],\n")
+        f.write(f"[{pos[wallNum+cur_n[None]-1][0]}, {pos[wallNum+cur_n[None]-1][1]}, 0]\n")
+        f.write("]")
+        cur_frame += 1
+        # pre_render()
+        # pos_show = pos.to_numpy()
+        # palette_show = palette.to_numpy()
+        # pos_show[:, 0] *= 1.0 / boundX
+        # pos_show[:, 1] *= 1.0 / boundY
+        # roll = math.ceil((cur_n[None] + wallNum) / 255)
+        # for i in range(roll): # you can render up to 255 circles at one time
+        #     left = i * 255
+        #     right = min(cur_n[None] + wallNum, (i+1)*255)
+        #     gui.circles(pos_show[left:right, :], radius=3, palette=palette_show[left:right], palette_indices=[i for i in range(right-left)])
+        # gui.show()
     

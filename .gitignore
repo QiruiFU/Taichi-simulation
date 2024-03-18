@@ -1,2 +1,4 @@
 .vscode
 *.ini
+out
+test-ply
