@@ -7,15 +7,17 @@ ti.init(arch=ti.gpu)
 show_type = 0
 
 # boundary
-boundX = 25.0 * ti.sqrt(10.0)
-boundY = 40.0 * ti.sqrt(10.0)
+boundX = 75
+boundY = 75
+boundZ = 75
 
 # Wall
-wallNumX = int(boundX // 0.5) - 5
-wallNumY = int(boundY // 0.5) - 5
-wallNum = wallNumX * 3 + (wallNumY - 3) * 6
+# wallNumX = int(boundX // 0.5) - 5
+# wallNumY = int(boundY // 0.5) - 5
+# wallNum = wallNumX * 3 + (wallNumY - 3) * 6
+wallNum = 0
 
-fluid_n = 5000
+fluid_n = 27000
 total_num = fluid_n + wallNum
 phase = 2
 h = 1.2
@@ -32,10 +34,10 @@ k3 = 40.0
 
 dt = 1.0 / (frame*substep)
 
-vel = ti.Vector.field(2, float, shape=fluid_n)
-drift_vel = ti.Vector.field(2, float, shape=(fluid_n, phase))
-pos = ti.Vector.field(2, float, shape=total_num)
-acc = ti.Vector.field(2, float, shape=fluid_n)
+vel = ti.Vector.field(3, float, shape=fluid_n)
+drift_vel = ti.Vector.field(3, float, shape=(fluid_n, phase))
+pos = ti.Vector.field(3, float, shape=total_num)
+acc = ti.Vector.field(3, float, shape=fluid_n)
 prs = ti.field(float, shape=fluid_n) # prs_k = prs_m
 rho_m = ti.field(float, shape=fluid_n) # rho_m of particle
 rho_bar = ti.field(float, shape=fluid_n) # interpolated rho
@@ -44,24 +46,25 @@ alpha = ti.field(float, shape=(fluid_n, phase))
 
 # cell
 cellSize = 4.0
-numCellX = ti.ceil(boundX / cellSize)
-numCellY = ti.ceil(boundY / cellSize)
-numCell = numCellX * numCellY
+numCellX = int(ti.ceil(boundX / cellSize))
+numCellY = int(ti.ceil(boundY / cellSize))
+numCellZ = int(ti.ceil(boundZ / cellSize))
+numCell = numCellX * numCellY * numCellZ
 
-ParNum = ti.field(int, shape = int(numCell))
-Particles = ti.field(int, shape = (int(numCell), total_num))
+ParNum = ti.field(int, shape = (numCellX, numCellY, numCellZ))
+Particles = ti.field(int, shape = (numCellX, numCellY, numCellZ, 100)) # TODO : a more accurate border
 NeiNum = ti.field(int, shape = fluid_n)
-neighbor = ti.field(int, shape = (fluid_n, total_num))
+neighbor = ti.field(int, shape = (fluid_n, 100))
 
 # rendering
-palette = ti.field(int, shape = total_num)
-pos_p0 = ti.Vector.field(3, float, shape=total_num)
-pos_p1 = ti.Vector.field(3, float, shape=total_num)
-cnt_p0 = ti.field(int, shape=())
-cnt_p1 = ti.field(int, shape=())
+palette = ti.Vector.field(3, int, shape = total_num)
+# pos_p0 = ti.Vector.field(3, float, shape=total_num)
+# pos_p1 = ti.Vector.field(3, float, shape=total_num)
+# cnt_p0 = ti.field(int, shape=())
+# cnt_p1 = ti.field(int, shape=())
 
 @ti.func
-def W(r) -> float:
+def W(r:float) -> float:
     res = 0.0
     if 0 < r and r < h:
         x = (h*h - r*r) / (h**3)
@@ -70,15 +73,31 @@ def W(r) -> float:
 
 
 @ti.func
-def DW(r): 
-    res = ti.Vector([0.0, 0.0])
+def DW(r) -> ti.Vector: 
+    # res = ti.Vector([0.0, 0.0])
+    # r_len = r.norm()
+    # if 0 < r_len and r_len < h:
+    #     x = (h - r_len) / (h * h * h)
+    #     g_factor = -45.0 / tm.pi * x * x
+    #     res = r * g_factor / r_len
+    # return res
+
+    res = r
     r_len = r.norm()
-    if 0 < r_len and r_len < h:
-        x = (h - r_len) / (h * h * h)
-        g_factor = -45.0 / tm.pi * x * x
-        res = r * g_factor / r_len
-    return res
-    
+    res *= - 945 / (32 * tm.pi * (h ** 9.0))
+    res *= (h * h - r_len * r_len) ** 2
+
+
+@ti.func
+def ValidCell(idx:int, idy:int, idz:int) -> bool:
+    if idx < 0 or idx >= numCellX:
+        return False
+    if idy < 0 or idy >= numCellY:
+        return False
+    if idz < 0 or idz >= numCellZ:
+        return False
+    return True
+
 
 @ti.func
 def boundry(idx:int):
@@ -103,6 +122,16 @@ def boundry(idx:int):
         if vel[idx][1] < 0.0:
             vel[idx][1] = - 0.999 * vel[idx][1]
 
+    if pos[idx][2] > boundZ - eps:
+        pos[idx][2] = boundZ - eps
+        if vel[idx][2] > 0.0:
+            vel[idx][2] = - 0.999 * vel[idx][1]
+
+    if pos[idx][2] < eps:
+        pos[idx][2] = eps
+        if vel[idx][2] < 0.0:
+            vel[idx][2] = - 0.999 * vel[idx][1]
+
 
 @ti.kernel
 def neighbor_search():
@@ -112,27 +141,30 @@ def neighbor_search():
     neighbor.fill(0)
 
     for i in pos:
-        idx = int(pos[i][0]/cellSize-0.5) + int(pos[i][1]/cellSize-0.5) * numCellX
-        k = ti.atomic_add(ParNum[int(idx)], 1)
-        Particles[int(idx), k] = i
+        idx_x = int(pos[i][0] / cellSize - 0.5)
+        idx_y = int(pos[i][1] / cellSize - 0.5)
+        idx_z = int(pos[i][2] / cellSize - 0.5)
+        k = ti.atomic_add(ParNum[idx_x, idx_y, idx_z], 1)
+        Particles[idx_x, idx_y, idx_z, k] = i
 
     for i in range(fluid_n):
-        idx_x = int(pos[i][0]/cellSize - 0.5)
-        idx_y = int(pos[i][1]/cellSize - 0.5)
+        idx_x = int(pos[i][0] / cellSize - 0.5)
+        idx_y = int(pos[i][1] / cellSize - 0.5)
+        idx_z = int(pos[i][2] / cellSize - 0.5)
         kk = 0
-        for j in range(9):
-            dx = ti.Vector([1, 1, 0, -1, -1, -1, 0, 1, 0])
-            dy = ti.Vector([0, 1, 1, 1, 0, -1, -1, -1, 0])
-            new_x = idx_x + dx[j]
-            new_y = idx_y + dy[j]
-            if new_x<numCellX and new_x>=0 and new_y<numCellY and new_y>=0:
-                new_idx = int(new_x) + int(new_y * numCellX)
-                cnt = ParNum[new_idx]
-                for t in range(cnt):
-                    nei = Particles[new_idx, t]
-                    if nei!=i and (pos[nei]-pos[i]).norm() < 1.1*h:
-                        neighbor[i, kk] = nei
-                        kk += 1
+        for dx in range(-1, 2):
+            for dy in range(-1, 2):
+                for dz in range(-1, 2):
+                    new_x = idx_x + dx
+                    new_y = idx_y + dy
+                    new_z = idx_z + dz
+                    if ValidCell(new_x, new_y, new_z):
+                        cnt = ParNum[new_x, new_y, new_z]
+                        for t in range(cnt):
+                            nei = Particles[new_x, new_y, new_z, t]
+                            if nei!=i and (pos[nei]-pos[i]).norm() < 1.1*h:
+                                neighbor[i, kk] = nei
+                                kk += 1
         NeiNum[i] = kk
 
 
@@ -141,37 +173,28 @@ def init():
     rho_0[0] = 1.0  # water
     rho_0[1] = 0.5  # oil
     g[0] = ti.Vector([0.0, -9.8])
-    mid = fluid_n / 2
-    num = int(tm.sqrt(mid))
+    mid = fluid_n
+    num = 30
 
     for i in range(mid):
-        posx = (i % num) * 0.65
-        posy = (i // num) * 0.65
-        pos[i] = ti.Vector([0.4*boundX + posx, 0.2*boundY + posy])        
+        posz = (i // 900) * 0.65
+        plane = i % 900
+        posx = (plane % num) * 0.65
+        posy = (plane // num) * 0.65
+        pos[i] = ti.Vector([0.4*boundX + posx, 0.4*boundY + posy, 0.2*boundZ + posz])        
         alpha[i, 0] = 0.0
         alpha[i, 1] = 1.0
 
-    for i in range(mid, fluid_n):
-        j = i - mid
-        posx = (j % num) * 0.65
-        posy = (j // num) * 0.65
-        pos[i] = ti.Vector([0.4*boundX + posx, 0.6*boundY + posy])        
-        alpha[i, 0] = 1.0
-        alpha[i, 1] = 0.0
+    # for i in range(mid, fluid_n):
+    #     j = i - mid
+    #     posz = (j // 900) * 0.65
+    #     plane = j % 900
+    #     posx = (plane % num) * 0.65
+    #     posy = (plane // num) * 0.65
+    #     pos[i] = ti.Vector([0.4*boundX + posx, 0.4*boundY + posy, 0.2*boundZ + posz])        
+    #     alpha[i, 0] = 1.0
+    #     alpha[i, 1] = 0.0
     
-    for i in range(wallNumX):
-        pos[fluid_n+3*i] = ti.Vector([(i+1) * 0.5, 0.5])
-        pos[fluid_n+3*i+1] = ti.Vector([(i+1) * 0.5, 1.0])
-        pos[fluid_n+3*i+2] = ti.Vector([(i+1) * 0.5, 1.5])
-    
-    for i in range(wallNumY-3):
-        pos[fluid_n+wallNumX*3+6*i] = ti.Vector([0.5, (i+4) * 0.5])
-        pos[fluid_n+wallNumX*3+6*i+1] = ti.Vector([1.0, (i+4) * 0.5])
-        pos[fluid_n+wallNumX*3+6*i+2] = ti.Vector([1.5, (i+4) * 0.5])
-        pos[fluid_n+wallNumX*3+6*i+3] = ti.Vector([(wallNumX-2)*0.5, (i+4) * 0.5])
-        pos[fluid_n+wallNumX*3+6*i+4] = ti.Vector([(wallNumX-1)*0.5, (i+4) * 0.5])
-        pos[fluid_n+wallNumX*3+6*i+5] = ti.Vector([(wallNumX-0)*0.5, (i+4) * 0.5])
-
 
 @ti.kernel
 def cal_press():
@@ -206,9 +229,9 @@ def cal_drift():
             coef -= alpha[i, ph] * rho_0[ph] * rho_0[ph] / rho_m[i]
 
         first_term *= coef
-        second_term = ti.Vector([0.0, 0.0])
+        second_term = ti.Vector([0.0, 0.0, 0.0])
         for ph in range(phase):
-            prs_grad = ti.Vector([0.0, 0.0])
+            prs_grad = ti.Vector([0.0, 0.0, 0.0])
             for nei in range(NeiNum[i]):
                 j = neighbor[i, nei]
                 if j < fluid_n:
@@ -277,8 +300,8 @@ def check_alpha():
 def cal_acc():
     for i in acc:
         acc[i] = g[0]
-        prs_grad = ti.Vector([0.0, 0.0])
-        Tdm_grad = ti.Vector([0.0, 0.0])
+        prs_grad = ti.Vector([0.0, 0.0, 0.0])
+        Tdm_grad = ti.Vector([0.0, 0.0, 0.0])
 
         for nei in range(NeiNum[i]):
             j = neighbor[i, nei]
@@ -315,69 +338,83 @@ def pre_render():
     for i in pos:
         if i < fluid_n:
             if show_type == 0:
-                clr = int(alpha[i, 0] * 0xFF) * 0x010000 + int(alpha[i, 1] * 0xFF) * 0x000100
-                palette[i] = clr
+                palette[i][0] = int(alpha[i, 0] * 0xFF)
+                palette[i][1] = int(alpha[i, 1] * 0xFF)
+                palette[i][2] = 0
             elif show_type == 1 :
-                ext = (prs[i] + 50) / 400
-                clr = int(ext * 0xFF) * 0x010000 + int((1-ext) * 0xFF) * 0x000001
-                palette[i] = clr
+                palette[i][0] = int(alpha[i, 0] * 0xFF)
+                palette[i][1] = int(alpha[i, 1] * 0xFF)
+                palette[i][2] = 0
         else:
-            palette[i] = 0xFFFFFF
+            palette[i] = ti.Vector([0xFF, 0xFF, 0xFF])
 
 
-@ti.kernel
-def classify_pos():
-    cnt_p0[None] = 0
-    cnt_p1[None] = 0
-    pos_p0.fill(0)
-    pos_p1.fill(0)
+# @ti.kernel
+# def classify_pos():
+#     cnt_p0[None] = 0
+#     cnt_p1[None] = 0
+#     pos_p0.fill(0)
+#     pos_p1.fill(0)
 
-    for i in vel:
-        if alpha[i, 0] > 0.5:
-            temp0 = ti.atomic_add(cnt_p0[None], 1)
-            pos_p0[temp0][0] = pos[i][0]
-            pos_p0[temp0][1] = pos[i][1]
-            pos_p0[temp0][2] = 0.0
-        else:
-            temp1 = ti.atomic_add(cnt_p1[None], 1)
-            pos_p1[temp1][0] = pos[i][0]
-            pos_p1[temp1][1] = pos[i][1]
-            pos_p1[temp1][2] = 0.0
+#     for i in vel:
+#         if alpha[i, 0] > 0.5:
+#             temp0 = ti.atomic_add(cnt_p0[None], 1)
+#             pos_p0[temp0][0] = pos[i][0]
+#             pos_p0[temp0][1] = pos[i][1]
+#             pos_p0[temp0][2] = 0.0
+#         else:
+#             temp1 = ti.atomic_add(cnt_p1[None], 1)
+#             pos_p1[temp1][0] = pos[i][0]
+#             pos_p1[temp1][1] = pos[i][1]
+#             pos_p1[temp1][2] = 0.0
     
 
 if __name__ == '__main__':
     init()
-    cur_frame = 0
-    gui = ti.GUI('SPH', res = (500, 800))
+    gui = ti.ui.Window('SPH', res = (700, 700))
+    canvas = gui.get_canvas()
+    canvas.set_background_color((1, 1, 1))
+    scene = gui.get_scene()
+    camera = ti.ui.Camera()
     while gui.running:
         for _ in range(substep):
-            neighbor_search()
-            cal_press()
-            cal_drift()
-            adv_alpha()
-            check_alpha()
-            cal_acc()
-            advect()
+            # neighbor_search()
+            # cal_press()
+            # cal_drift()
+            # adv_alpha()
+            # check_alpha()
+            # cal_acc()
+            # advect()
+            pass
 
-        classify_pos()
+        # classify_pos()
 
-        series_prefix = "out/plyfile/phase0_.ply"
-        np_pos_0 = pos_p0.to_numpy()
-        writer0 = ti.tools.PLYWriter(num_vertices = cnt_p0[None])
-        writer0.add_vertex_pos(np_pos_0[0:cnt_p0[None], 0], np_pos_0[0:cnt_p0[None], 1], np_pos_0[0:cnt_p0[None], 2])
-        writer0.export_frame_ascii(cur_frame, series_prefix)
+        # series_prefix = "out/plyfile/phase0_.ply"
+        # np_pos_0 = pos_p0.to_numpy()
+        # writer0 = ti.tools.PLYWriter(num_vertices = cnt_p0[None])
+        # writer0.add_vertex_pos(np_pos_0[0:cnt_p0[None], 0], np_pos_0[0:cnt_p0[None], 1], np_pos_0[0:cnt_p0[None], 2])
+        # writer0.export_frame_ascii(cur_frame, series_prefix)
 
-        series_prefix = "out/plyfile/phase1_.ply"
-        np_pos_1 = pos_p1.to_numpy()
-        writer1 = ti.tools.PLYWriter(num_vertices = cnt_p1[None])
-        writer1.add_vertex_pos(np_pos_1[0:cnt_p1[None], 0], np_pos_1[0:cnt_p1[None], 1], np_pos_1[0:cnt_p1[None], 2])
-        writer1.export_frame_ascii(cur_frame, series_prefix)
+        # series_prefix = "out/plyfile/phase1_.ply"
+        # np_pos_1 = pos_p1.to_numpy()
+        # writer1 = ti.tools.PLYWriter(num_vertices = cnt_p1[None])
+        # writer1.add_vertex_pos(np_pos_1[0:cnt_p1[None], 0], np_pos_1[0:cnt_p1[None], 1], np_pos_1[0:cnt_p1[None], 2])
+        # writer1.export_frame_ascii(cur_frame, series_prefix)
 
-        cur_frame += 1
-        if cur_frame == 2400 :
-            exit()
+        # cur_frame += 1
+        # if cur_frame == 2400 :
+        #     exit()
 
-        # pre_render()
+        pre_render()
+        camera.position(37, -40, 37)
+        camera.lookat(37, 10000, 37)
+        camera.up(0, 0, 1)
+        scene.particles(pos, 0.1, per_vertex_color=palette)
+        scene.ambient_light((0.7, 0.7, 0.7))
+        scene.set_camera(camera)
+        canvas.scene(scene)
+        gui.show()
+
         # pos_show = pos.to_numpy()
         # palette_show = palette.to_numpy()
         # pos_show[:, 0] *= 1.0 / boundX
