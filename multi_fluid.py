@@ -7,9 +7,9 @@ ti.init(arch=ti.gpu)
 show_type = 0
 
 # boundary
-boundX = 75
-boundY = 75
-boundZ = 75
+boundX = 50
+boundY = 50
+boundZ = 100
 
 # Wall
 # wallNumX = int(boundX // 0.5) - 5
@@ -20,8 +20,8 @@ wallNum = 0
 fluid_n = 27000
 total_num = fluid_n + wallNum
 phase = 2
-h = 1.2
-g = ti.Vector.field(2, float, shape=1)
+h = 1.5
+g = ti.Vector.field(3, float, shape=1)
 damp = 0.9993
 tao = 1e-4
 
@@ -30,7 +30,7 @@ miscible = False
 frame = 60
 substep = 20
 
-k3 = 40.0
+k3 = 100.0
 
 dt = 1.0 / (frame*substep)
 
@@ -52,16 +52,13 @@ numCellZ = int(ti.ceil(boundZ / cellSize))
 numCell = numCellX * numCellY * numCellZ
 
 ParNum = ti.field(int, shape = (numCellX, numCellY, numCellZ))
-Particles = ti.field(int, shape = (numCellX, numCellY, numCellZ, 100)) # TODO : a more accurate border
+Particles = ti.field(int, shape = (numCellX, numCellY, numCellZ, 4000))
 NeiNum = ti.field(int, shape = fluid_n)
-neighbor = ti.field(int, shape = (fluid_n, 100))
+neighbor = ti.field(int, shape = (fluid_n, 200))
 
 # rendering
 palette = ti.Vector.field(3, int, shape = total_num)
-# pos_p0 = ti.Vector.field(3, float, shape=total_num)
-# pos_p1 = ti.Vector.field(3, float, shape=total_num)
-# cnt_p0 = ti.field(int, shape=())
-# cnt_p1 = ti.field(int, shape=())
+
 
 @ti.func
 def W(r:float) -> float:
@@ -74,29 +71,21 @@ def W(r:float) -> float:
 
 @ti.func
 def DW(r) -> ti.Vector: 
-    # res = ti.Vector([0.0, 0.0])
+    res = ti.Vector([0.0, 0.0, 0.0])
+    r_len = r.norm()
+    if 0 < r_len and r_len < h:
+        x = (h - r_len) / (h * h * h)
+        g_factor = -45.0 / tm.pi * x * x
+        res = r * g_factor / r_len
+    return res
+
+    # res = ti.Vector([0.0, 0.0, 0.0])
     # r_len = r.norm()
     # if 0 < r_len and r_len < h:
-    #     x = (h - r_len) / (h * h * h)
-    #     g_factor = -45.0 / tm.pi * x * x
-    #     res = r * g_factor / r_len
+    #     res = r
+    #     res *= - 945 / (32 * tm.pi * (h ** 9.0))
+    #     res *= (h * h - r_len * r_len) ** 2
     # return res
-
-    res = r
-    r_len = r.norm()
-    res *= - 945 / (32 * tm.pi * (h ** 9.0))
-    res *= (h * h - r_len * r_len) ** 2
-
-
-@ti.func
-def ValidCell(idx:int, idy:int, idz:int) -> bool:
-    if idx < 0 or idx >= numCellX:
-        return False
-    if idy < 0 or idy >= numCellY:
-        return False
-    if idz < 0 or idz >= numCellZ:
-        return False
-    return True
 
 
 @ti.func
@@ -158,7 +147,7 @@ def neighbor_search():
                     new_x = idx_x + dx
                     new_y = idx_y + dy
                     new_z = idx_z + dz
-                    if ValidCell(new_x, new_y, new_z):
+                    if not(new_x < 0 or new_x >= numCellX or new_y < 0 or new_y >= numCellY or new_z < 0 or new_z >= numCellZ):
                         cnt = ParNum[new_x, new_y, new_z]
                         for t in range(cnt):
                             nei = Particles[new_x, new_y, new_z, t]
@@ -172,28 +161,28 @@ def neighbor_search():
 def init():
     rho_0[0] = 1.0  # water
     rho_0[1] = 0.5  # oil
-    g[0] = ti.Vector([0.0, -9.8])
+    g[0] = ti.Vector([0.0, 0.0, -9.8])
     mid = fluid_n
     num = 30
 
     for i in range(mid):
-        posz = (i // 900) * 0.65
+        posz = (i // 900) * 1.2
         plane = i % 900
-        posx = (plane % num) * 0.65
-        posy = (plane // num) * 0.65
-        pos[i] = ti.Vector([0.4*boundX + posx, 0.4*boundY + posy, 0.2*boundZ + posz])        
+        posx = (plane % num) * 1.2
+        posy = (plane // num) * 1.2
+        pos[i] = ti.Vector([0.1*boundX + posx, 0.1*boundY + posy, 0.2*boundZ + posz])        
+        alpha[i, 0] = 1.0
+        alpha[i, 1] = 0.0
+
+    for i in range(mid, fluid_n):
+        j = i - mid
+        posz = (j // 900) * 1.2
+        plane = j % 900
+        posx = (plane % num) * 1.2
+        posy = (plane // num) * 1.2
+        pos[i] = ti.Vector([0.1*boundX + posx, 0.1*boundY + posy, 0.6*boundZ + posz])        
         alpha[i, 0] = 0.0
         alpha[i, 1] = 1.0
-
-    # for i in range(mid, fluid_n):
-    #     j = i - mid
-    #     posz = (j // 900) * 0.65
-    #     plane = j % 900
-    #     posx = (plane % num) * 0.65
-    #     posy = (plane // num) * 0.65
-    #     pos[i] = ti.Vector([0.4*boundX + posx, 0.4*boundY + posy, 0.2*boundZ + posz])        
-    #     alpha[i, 0] = 1.0
-    #     alpha[i, 1] = 0.0
     
 
 @ti.kernel
@@ -313,7 +302,7 @@ def cal_acc():
         for nei in range(NeiNum[i]):
             j = neighbor[i, nei]
             if j < fluid_n:
-                temp = ti.Vector([0.0, 0.0])
+                temp = ti.Vector([0.0, 0.0, 0.0])
                 for k in range(phase):
                     temp1 = alpha[j, k] * drift_vel[j, k] * (drift_vel[j, k].dot(DW(pos[i] - pos[j])))
                     temp2 = alpha[i, k] * drift_vel[i, k] * (drift_vel[i, k].dot(DW(pos[i] - pos[j])))
@@ -342,8 +331,9 @@ def pre_render():
                 palette[i][1] = int(alpha[i, 1] * 0xFF)
                 palette[i][2] = 0
             elif show_type == 1 :
-                palette[i][0] = int(alpha[i, 0] * 0xFF)
-                palette[i][1] = int(alpha[i, 1] * 0xFF)
+                ratio = (prs[i] + 30) / 130.0
+                palette[i][0] = int(ratio * 0xFF)
+                palette[i][1] = int((1-ratio) * 0xFF)
                 palette[i][2] = 0
         else:
             palette[i] = ti.Vector([0xFF, 0xFF, 0xFF])
@@ -376,20 +366,31 @@ if __name__ == '__main__':
     canvas.set_background_color((1, 1, 1))
     scene = gui.get_scene()
     camera = ti.ui.Camera()
-    while gui.running:
+
+    cur_frame = 0
+
+    while True:
         for _ in range(substep):
-            # neighbor_search()
-            # cal_press()
-            # cal_drift()
-            # adv_alpha()
-            # check_alpha()
-            # cal_acc()
-            # advect()
-            pass
+            neighbor_search()
+            cal_press()
+            cal_drift()
+            adv_alpha()
+            check_alpha()
+            cal_acc()
+            advect()
 
         # classify_pos()
 
-        # series_prefix = "out/plyfile/phase0_.ply"
+        # series_prefix = "out/plyfile/water_.ply"
+        # np_pos = pos.to_numpy()
+        # writer0 = ti.tools.PLYWriter(num_vertices = fluid_n)
+        # writer0.add_vertex_pos(np_pos[0:fluid_n, 0], np_pos[0:fluid_n, 1], np_pos[0:fluid_n, 2])
+        # writer0.export_frame_ascii(cur_frame, series_prefix)
+        # cur_frame += 1
+        # print(cur_frame)
+        # if cur_frame == 2400 :
+        #     exit()
+
         # np_pos_0 = pos_p0.to_numpy()
         # writer0 = ti.tools.PLYWriter(num_vertices = cnt_p0[None])
         # writer0.add_vertex_pos(np_pos_0[0:cnt_p0[None], 0], np_pos_0[0:cnt_p0[None], 1], np_pos_0[0:cnt_p0[None], 2])
@@ -401,28 +402,13 @@ if __name__ == '__main__':
         # writer1.add_vertex_pos(np_pos_1[0:cnt_p1[None], 0], np_pos_1[0:cnt_p1[None], 1], np_pos_1[0:cnt_p1[None], 2])
         # writer1.export_frame_ascii(cur_frame, series_prefix)
 
-        # cur_frame += 1
-        # if cur_frame == 2400 :
-        #     exit()
-
         pre_render()
-        camera.position(37, -40, 37)
-        camera.lookat(37, 10000, 37)
+        camera.position(100, 100, 60)
+        camera.lookat(0, 0, 30)
         camera.up(0, 0, 1)
-        scene.particles(pos, 0.1, per_vertex_color=palette)
+        scene.particles(pos, 0.5, per_vertex_color=palette)
         scene.ambient_light((0.7, 0.7, 0.7))
         scene.set_camera(camera)
         canvas.scene(scene)
         gui.show()
-
-        # pos_show = pos.to_numpy()
-        # palette_show = palette.to_numpy()
-        # pos_show[:, 0] *= 1.0 / boundX
-        # pos_show[:, 1] *= 1.0 / boundY
-        # roll = math.ceil(total_num / 255)
-        # for i in range(roll): # you can render up to 255 circles at one time
-        #     left = i * 255
-        #     right = min(total_num, (i+1)*255)
-        #     gui.circles(pos_show[left:right, :], radius=3, palette=palette_show[left:right], palette_indices=[i for i in range(right-left)])
-        # gui.show()
     
