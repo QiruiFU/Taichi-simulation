@@ -2,38 +2,44 @@ import taichi as ti
 import taichi.math as tm
 import numpy as np
 import math
+import time
 
 ti.init(arch=ti.gpu)
 show_type = 0
+visualization = 1
+
+# parameters
+particle_radius = 1.0
+h = particle_radius * 4
+dt = 0.2 * min(math.sqrt(h / 60.0), h / 500)
+# particle_distance = ((4 * (particle_radius**3) * tm.pi) / 150) ** (1 / 3)
+particle_distance = 1.3
+damp = 0.9993
 
 # boundary
-boundX = 65
-boundY = 65
-boundZ = 100
+boundX = 100
+boundY = 100
+boundZ = 200
 
 # Wall
-wall_gap = 0.6
+wall_gap = 0.6 * particle_distance
+wall_layer = 6
 wallNumX = int(boundX // wall_gap) - 4
 wallNumY = int(boundY // wall_gap) - 4
-wallNumZ = int((boundZ / 2) // wall_gap) - 4
-wallNum = wallNumX * wallNumY * 3  + (wallNumZ - 3) * wallNumX * 6 + (wallNumZ - 3) * (wallNumY - 6) * 6
+wallNumZ = int((boundZ/3) // wall_gap) - 4
+wallNum = wallNumX * wallNumY * wall_layer  + (wallNumZ - wall_layer) * wallNumX * 2 * wall_layer + (wallNumZ - wall_layer) * (wallNumY - 2 * wall_layer) * 2 * wall_layer
 
 fluid_n = 27000
 total_num = fluid_n + wallNum
 phase = 2
-h = 1.5
 g = ti.Vector.field(3, float, shape=1)
-damp = 0.9994
-tao = 1e-5
+tao = 1e-8
 
 miscible = False
 
-frame = 60
-substep = 20
-
-k3 = 80.0
-
-dt = 1.0 / (frame*substep)
+k1 = 200.0
+k2 = 7.0
+# k3 = 1000.0
 
 vel = ti.Vector.field(3, float, shape=fluid_n)
 drift_vel = ti.Vector.field(3, float, shape=(fluid_n, phase))
@@ -46,7 +52,7 @@ rho_0 = ti.field(float, shape=phase) # rho_0 for all phases
 alpha = ti.field(float, shape=(fluid_n, phase))
 
 # cell
-cellSize = 4.0
+cellSize = 6
 numCellX = int(ti.ceil(boundX / cellSize))
 numCellY = int(ti.ceil(boundY / cellSize))
 numCellZ = int(ti.ceil(boundZ / cellSize))
@@ -55,7 +61,7 @@ numCell = numCellX * numCellY * numCellZ
 ParNum = ti.field(int, shape = (numCellX, numCellY, numCellZ))
 Particles = ti.field(int, shape = (numCellX, numCellY, numCellZ, 4000))
 NeiNum = ti.field(int, shape = fluid_n)
-neighbor = ti.field(int, shape = (fluid_n, 200))
+neighbor = ti.field(int, shape = (fluid_n, 2000))
 
 # rendering
 palette = ti.Vector.field(3, int, shape = fluid_n)
@@ -71,7 +77,18 @@ def W(r:float) -> float:
 
 
 @ti.func
-def DW(r) -> ti.Vector: 
+def DW_prs(r) -> ti.Vector: 
+    res = ti.Vector([0.0, 0.0, 0.0])
+    r_len = r.norm()
+    if 0 < r_len and r_len < h:
+        x = (h - r_len) / (h * h * h)
+        g_factor = -45.0 / tm.pi * x * x
+        res = r * g_factor / r_len
+    return res
+
+
+@ti.func
+def DW(r) -> ti.Vector:
     res = ti.Vector([0.0, 0.0, 0.0])
     r_len = r.norm()
     if 0 < r_len and r_len < h:
@@ -137,41 +154,36 @@ def neighbor_search():
         k = ti.atomic_add(ParNum[idx_x, idx_y, idx_z], 1)
         Particles[idx_x, idx_y, idx_z, k] = i
 
-    for i in range(fluid_n):
+    for i, dx, dy, dz in ti.ndrange(fluid_n, (-1, 2), (-1, 2), (-1, 2)):
         idx_x = int(pos[i][0] / cellSize - 0.5)
         idx_y = int(pos[i][1] / cellSize - 0.5)
         idx_z = int(pos[i][2] / cellSize - 0.5)
-        kk = 0
-        for dx in range(-1, 2):
-            for dy in range(-1, 2):
-                for dz in range(-1, 2):
-                    new_x = idx_x + dx
-                    new_y = idx_y + dy
-                    new_z = idx_z + dz
-                    if not(new_x < 0 or new_x >= numCellX or new_y < 0 or new_y >= numCellY or new_z < 0 or new_z >= numCellZ):
-                        cnt = ParNum[new_x, new_y, new_z]
-                        for t in range(cnt):
-                            nei = Particles[new_x, new_y, new_z, t]
-                            if nei!=i and (pos[nei]-pos[i]).norm() < 1.1*h:
-                                neighbor[i, kk] = nei
-                                kk += 1
-        NeiNum[i] = kk
+        new_x = idx_x + dx
+        new_y = idx_y + dy
+        new_z = idx_z + dz
+        if not(new_x < 0 or new_x >= numCellX or new_y < 0 or new_y >= numCellY or new_z < 0 or new_z >= numCellZ):
+            cnt = ParNum[new_x, new_y, new_z]
+            for t in range(cnt):
+                nei = Particles[new_x, new_y, new_z, t]
+                if nei!=i and (pos[nei]-pos[i]).norm() < 1.1*h:
+                    kk = ti.atomic_add(NeiNum[i], 1)
+                    neighbor[i, kk] = nei
 
 
 @ti.kernel
 def init():
-    rho_0[0] = 1.0  # water
+    rho_0[0] = 1000.0 # water
     rho_0[1] = 0.5  # oil
     g[0] = ti.Vector([0.0, 0.0, -9.8])
     mid = fluid_n
-    num = 30
+    num = 25
 
     for i in range(mid):
-        posz = (i // (num * num)) * 1.2
+        posz = (i // (num * num)) * particle_distance
         plane = i % (num * num)
-        posx = (plane % num) * 1.2
-        posy = (plane // num) * 1.2
-        pos[i] = ti.Vector([0.3*boundX + posx, 0.3*boundY + posy, 0.3*boundZ + posz])        
+        posx = (plane % num) * particle_distance
+        posy = (plane // num) * particle_distance
+        pos[i] = ti.Vector([0.35*boundX + posx, 0.35*boundY + posy, 0.05*boundZ + posz])        
         alpha[i, 0] = 1.0
         alpha[i, 1] = 0.0
 
@@ -181,28 +193,28 @@ def init():
         plane = j % 900
         posx = (plane % num) * 1.2
         posy = (plane // num) * 1.2
-        pos[i] = ti.Vector([0.1*boundX + posx, 0.1*boundY + posy, 0.6*boundZ + posz])        
+        pos[i] = ti.Vector([0.2*boundX + posx, 0.2*boundY + posy, 0.2*boundZ + posz])        
         alpha[i, 0] = 0.0
         alpha[i, 1] = 1.0
     
     cur_idx = fluid_n
-    for i, j, k in ti.ndrange(wallNumX, wallNumY, 3): # floor
+    for i, j, k in ti.ndrange(wallNumX, wallNumY, wall_layer): # floor
         temp_idx = ti.atomic_add(cur_idx, 1)
         pos[temp_idx] = ti.Vector([(i+1)*wall_gap, (j+1)*wall_gap, (k+1)*wall_gap])
     
-    for i, j, k in ti.ndrange(wallNumX, 3, (3, wallNumZ)): # wall
+    for i, j, k in ti.ndrange(wallNumX, wall_layer, (wall_layer, wallNumZ)): # wall
         temp_idx = ti.atomic_add(cur_idx, 1)
         pos[temp_idx] = ti.Vector([(i+1)*wall_gap, (j+1)*wall_gap, (k+1)*wall_gap])
     
-    for i, j, k in ti.ndrange(wallNumX, (wallNumY-3, wallNumY), (3, wallNumZ)): # wall
+    for i, j, k in ti.ndrange(wallNumX, (wallNumY-wall_layer, wallNumY), (wall_layer, wallNumZ)): # wall
         temp_idx = ti.atomic_add(cur_idx, 1)
         pos[temp_idx] = ti.Vector([(i+1)*wall_gap, (j+1)*wall_gap, (k+1)*wall_gap])
     
-    for i, j, k in ti.ndrange(3, (3, wallNumY-3), (3, wallNumZ)): # wall
+    for i, j, k in ti.ndrange(wall_layer, (wall_layer, wallNumY-wall_layer), (wall_layer, wallNumZ)): # wall
         temp_idx = ti.atomic_add(cur_idx, 1)
         pos[temp_idx] = ti.Vector([(i+1)*wall_gap, (j+1)*wall_gap, (k+1)*wall_gap])
 
-    for i, j, k in ti.ndrange((wallNumX-3, wallNumX), (3, wallNumY-3), (3, wallNumZ)): # wall
+    for i, j, k in ti.ndrange((wallNumX-wall_layer, wallNumX), (wall_layer, wallNumY-wall_layer), (wall_layer, wallNumZ)): # wall
         temp_idx = ti.atomic_add(cur_idx, 1)
         pos[temp_idx] = ti.Vector([(i+1)*wall_gap, (j+1)*wall_gap, (k+1)*wall_gap])
 
@@ -229,7 +241,8 @@ def cal_press():
     
     for i in prs:
         density = ti.max(rho_bar[i], rho_m[i])
-        prs[i] = k3 * (density - rho_m[i])
+        prs[i] = k1 * rho_m[i] * ((density/rho_m[i])**k2 - 1) / k2
+        # prs[i] = k3 * (density - rho_m[i])
 
 
 @ti.kernel
@@ -280,11 +293,15 @@ def adv_alpha(): # formula 17, 18
                 second_term += temp1 * temp2
 
         alpha[i, k] -= (first_term + second_term) * dt
+        if k == 1:
+            assert(first_term == 0 and second_term == 0)
     
 
 @ti.kernel
 def check_alpha():
     for i in range(fluid_n):
+        if alpha[i, 1] != 0.0:
+            alpha[i, 1] = 0.0
         tot = 0.0
         for ph in range(phase):
             if alpha[i, ph] > 0:
@@ -295,7 +312,8 @@ def check_alpha():
             for ph in range(phase):
                 cur = alpha[i, ph]
                 alpha[i, ph] = 1 / phase
-                del_p -= k3 * rho_0[ph] * (alpha[i, ph] - cur)
+                # del_p -= k3 * rho_0[ph] * (alpha[i, ph] - cur)
+                del_p -= k1 * rho_0[ph] * ((k2-1)*((rho_bar[i]/rho_m[i])**k2)+1) * (alpha[i, ph] - cur) / k2
         else:
             for ph in range(phase):
                 cur = alpha[i, ph]
@@ -303,7 +321,8 @@ def check_alpha():
                     alpha[i, ph] = 0.0
                 else:
                     alpha[i, ph] /= tot
-                del_p -= k3 * rho_0[ph] * (alpha[i, ph] - cur)
+                # del_p -= k3 * rho_0[ph] * (alpha[i, ph] - cur)
+                del_p -= k1 * rho_0[ph] * ((k2-1)*((rho_bar[i]/rho_m[i])**k2)+1) * (alpha[i, ph] - cur) / k2
         
         prs[i] += del_p
 
@@ -343,6 +362,7 @@ def advect():
         vel[i] += dt * acc[i]
         pos[i] += dt * vel[i]
         boundry(i)
+
 
 radius = ti.field(float, shape = total_num)
 @ti.kernel
@@ -394,9 +414,10 @@ if __name__ == '__main__':
     camera = ti.ui.Camera()
 
     cur_frame = 0
+    temp_max = 0
 
-    while True:
-        for _ in range(substep):
+    while gui.running:
+        for _ in range(10):
             neighbor_search()
             cal_press()
             cal_drift()
@@ -408,14 +429,28 @@ if __name__ == '__main__':
 
         # classify_pos()
 
-        series_prefix = "out/plyfile/water_.ply"
-        np_pos = pos.to_numpy()
-        writer0 = ti.tools.PLYWriter(num_vertices = fluid_n)
-        writer0.add_vertex_pos(np_pos[:fluid_n, 0], np_pos[:fluid_n, 1], np_pos[:fluid_n, 2])
-        writer0.export_frame_ascii(cur_frame, series_prefix)
-        cur_frame += 1
-        # print(cur_frame)
-        if cur_frame == 2400 :
+        if visualization == 0:
+            pre_render()
+            camera.position(180, 180, 180)
+            camera.lookat(10, 10, 0)
+            camera.up(0, 0, 1)
+            scene.particles(centers=render_pos, per_vertex_color=palette, radius=0.3)
+            scene.ambient_light((0.7, 0.7, 0.7))
+            scene.set_camera(camera)
+            canvas.scene(scene)
+            gui.show()
+            print(np.amin(render_pos.to_numpy(), axis=0))
+            print(np.amax(NeiNum.to_numpy()))
+            cur_frame += 1
+        else:
+            series_prefix = "out/plyfile/water_.ply"
+            np_pos = pos.to_numpy()
+            writer0 = ti.tools.PLYWriter(num_vertices = fluid_n)
+            writer0.add_vertex_pos(np_pos[:fluid_n, 0], np_pos[:fluid_n, 1], np_pos[:fluid_n, 2])
+            writer0.export_frame_ascii(cur_frame, series_prefix)
+            cur_frame += 1
+
+        if cur_frame == 1200 :
             exit()
 
         # np_pos_0 = pos_p0.to_numpy()
@@ -428,15 +463,4 @@ if __name__ == '__main__':
         # writer1 = ti.tools.PLYWriter(num_vertices = cnt_p1[None])
         # writer1.add_vertex_pos(np_pos_1[0:cnt_p1[None], 0], np_pos_1[0:cnt_p1[None], 1], np_pos_1[0:cnt_p1[None], 2])
         # writer1.export_frame_ascii(cur_frame, series_prefix)
-
-        # pre_render()
-        # camera.position(200, 35, 20)
-        # camera.lookat(-100, 35, 20)
-        # camera.up(0, 0, 1)
-        # scene.particles(centers=render_pos, per_vertex_color=palette, radius=0.4)
-        # scene.ambient_light((0.7, 0.7, 0.7))
-        # scene.set_camera(camera)
-        # canvas.scene(scene)
-        # gui.show()
-        # print(np.amin(pos.to_numpy()[:fluid_n], axis=0))
     
