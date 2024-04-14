@@ -4,13 +4,20 @@ import numpy as np
 import math
 import time
 
-def cal_fluidn(radius:int, height:int, dis:float) -> int:
+def cal_fluidn(water_radius:int, wall_radius:int, height:int, dis:float) -> int:
     res_n = 0
-    for i in range(1, radius + 1):
+    for i in range(1, water_radius + 1):
         cur_r = i * dis
         d_theta = 2.0 * tm.asin(0.5 * dis / cur_r)
         num = int((2 * tm.pi) / d_theta)
         num_circle[i-1] = num
+        res_n += num
+    
+    for i in range(wall_radius):
+        cur_r = water_radius * dis + (i+1) * 0.5 * dis
+        d_theta = 2.0 * tm.asin(0.5 * dis / cur_r)
+        num = int((2 * tm.pi) / d_theta)
+        num_circle[i+water_radius] = num
         res_n += num
     
     return res_n * height
@@ -18,7 +25,7 @@ def cal_fluidn(radius:int, height:int, dis:float) -> int:
 
 ti.init(arch=ti.gpu)
 show_type = 0
-visualization = 1
+visualization = 0
 
 # parameters
 particle_radius = 1.0
@@ -27,13 +34,13 @@ dt = 0.2 * min(math.sqrt(h / 60.0), h / 500)
 particle_distance = 0.95
 # wall_distance = 0.6
 damp = 0.999
-rot_force = 5
+rot_force = 8
 
 # boundary
-rho_wall = 1000.0
-wall_layer = 3
-centrifuge_radius = 18
-centrifuge_height = 10
+rho_wall = 200.0
+wall_layer = 8
+centrifuge_radius = 16
+centrifuge_height = 5
 total_radius = (centrifuge_radius + wall_layer) * particle_distance 
 total_height = (centrifuge_height + 2 * wall_layer) * particle_distance
 boundX = ti.ceil(2 * total_radius) + 4
@@ -41,8 +48,8 @@ boundY = ti.ceil(2 * total_radius) + 4
 boundZ = ti.ceil(total_height) + 4
 
 num_circle = ti.field(int, shape=centrifuge_radius)
-fluid_n = int(cal_fluidn(centrifuge_radius, centrifuge_height, particle_distance))
-total_num = int(cal_fluidn(centrifuge_radius + wall_layer, centrifuge_height + 2 * wall_layer, particle_distance))
+fluid_n = int(cal_fluidn(centrifuge_radius, 0, centrifuge_height, particle_distance))
+total_num = int(cal_fluidn(centrifuge_radius, wall_layer, centrifuge_height + 2 * wall_layer, particle_distance))
 phase = 2
 
 tao = 1e-7
@@ -171,7 +178,12 @@ def init():
     fluid_id = 0
     wall_id = total_num - 1
     for i, j in ti.ndrange((1, centrifuge_radius + wall_layer + 1), (1, centrifuge_height + 2*wall_layer + 1)):
-        cur_r = i * particle_distance
+        cur_r = 0.0
+        if i <= centrifuge_radius :
+            cur_r = i * particle_distance
+        else :
+            cur_r = centrifuge_radius * particle_distance + (i-centrifuge_radius) * 0.5 * particle_distance
+
         d_theta = 2.0 * tm.asin(0.5 * particle_distance / cur_r)
         center = ti.Vector([center_x, center_y, j * particle_distance])
         cur_theta = 0.0
@@ -180,7 +192,8 @@ def init():
             if i <= centrifuge_radius and j > wall_layer and j <= centrifuge_height + wall_layer:
                 temp = ti.atomic_add(fluid_id, 1)
                 pos[temp] = cur_r * ti.Vector([tm.cos(cur_theta), tm.sin(cur_theta), 0]) + center
-                alpha[temp, 0] = alpha[temp, 1] = 0.5
+                alpha[temp, 0] = 0.6
+                alpha[temp, 1] = 0.4
             else:
                 temp = ti.atomic_sub(wall_id, 1)
                 pos[temp] = cur_r * ti.Vector([tm.cos(cur_theta), tm.sin(cur_theta), 0]) + center
