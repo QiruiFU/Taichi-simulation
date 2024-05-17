@@ -25,16 +25,16 @@ def cal_fluidn(water_radius:int, wall_radius:int, height:int, dis:float) -> int:
 
 ti.init(arch=ti.gpu)
 show_type = 0
-visualization = 0
+visualization = 1
 
 # parameters
 particle_radius = 1.0
 h = particle_radius * 4
-dt = 0.2 * min(math.sqrt(h / 60.0), h / 500)
+dt = 0.0008
 particle_distance = 0.95
 # wall_distance = 0.6
 damp = 0.999
-rot_force = 8
+rot_force = 4
 
 # boundary
 rho_wall = 200.0
@@ -359,6 +359,7 @@ def pre_render():
 
 if __name__ == '__main__':
     init()
+    print(dt)
     gui = ti.ui.Window('SPH', res = (700, 700))
     canvas = gui.get_canvas()
     canvas.set_background_color((1, 1, 1))

@@ -5,7 +5,7 @@ import math
 ti.init(arch=ti.gpu)
 
 # boundary
-boundX = 50.0
+boundX = 70.0
 boundY = 100.0
 
 # Wall
@@ -16,13 +16,13 @@ wallNum = wallNumX * 3 + (wallNumY - 3) * 6
 cur_n = ti.field(int, shape=())
 fluid_n = 10000
 total_num = fluid_n + wallNum
-phase = 1
+phase = 2
 h = 1.1
 g = ti.Vector.field(2, float, shape=1)
 damp = 0.9995
-tao = 1e-4
+tao = 1e-8
 
-miscible = False
+miscible = True
 
 frame = 60
 substep = 20
@@ -53,8 +53,8 @@ NeiNum = ti.field(int, shape = total_num)
 neighbor = ti.field(int, shape = (total_num, total_num))
 
 # rendering
-palette = ti.field(int, shape = total_num)
-
+palette = ti.Vector.field(3, float, shape = fluid_n)
+particle_pos = ti.Vector.field(3, float, shape = fluid_n)
 
 @ti.func
 def W(r) -> float:
@@ -135,25 +135,8 @@ def neighbor_search():
 @ti.kernel
 def init():
     rho_0[0] = 1.0  # water
-    # rho_0[1] = 0.5  # oil
-    g[0] = ti.Vector([0.0, -9.8])
-    # mid = fluid_n
-    # num = int(tm.sqrt(mid))
-
-    # for i in range(mid):
-    #     posx = (i % num) * 0.65
-    #     posy = (i // num) * 0.65
-    #     pos[i] = ti.Vector([0.3*boundX + posx, 0.5*boundY + posy])        
-    #     alpha[i, 0] = 1.0
-    #     # alpha[i, 1] = 0.0
-
-    # for i in range(mid, fluid_n):
-    #     j = i - mid
-    #     posx = (j % num) * 0.65
-    #     posy = (j // num) * 0.65
-    #     pos[i] = ti.Vector([0.3*boundX + posx, 0.1*boundY + posy])        
-    #     alpha[i, 0] = 0.0
-    #     alpha[i, 1] = 1.0
+    rho_0[1] = 0.5  # oil
+    g[0] = ti.Vector([0.0, -20])
     
     for i in range(wallNumX):
         pos[3*i] = ti.Vector([(i+1) * 0.4, 0.4])
@@ -309,27 +292,30 @@ def advect():
 
 @ti.kernel
 def pre_render():
-    for i in pos:
-        if i >= wallNum:
-            clr = int(alpha[i, 0] * 0xFF) * 0x010000 
-            # + int(alpha[i, 1] * 0xFF) * 0x000100
-            palette[i] = clr
-        else:
-            palette[i] = 0xFFFFFF
+    for i in range(cur_n[None]):
+        particle_pos[i] = ti.Vector([pos[i+wallNum][0], pos[i+wallNum][1], 0.0])
+        palette[i] = ti.Vector([alpha[i+wallNum, 0], alpha[i+wallNum, 1], 0.0])
 
 
 if __name__ == '__main__':
     init()
     cur_frame = 0
-    gui = ti.GUI('SPH', res = (400, 800))
+    gui = ti.GUI('SPH', res = (800, 800))
     while gui.running:
         
-        if cur_n[None] < fluid_n :
-            cur_n[None] += 5
+        if cur_n[None] < fluid_n - 10 :
+            cur_n[None] += 10
             for idx in range(cur_n[None]-5, cur_n[None]):
                 pos[wallNum+idx] = ti.Vector([0.05 * boundX, 0.8 * boundY + (cur_n[None] - idx) * 0.65])
-                vel[wallNum+idx] = ti.Vector([40.0, 0.0])
+                vel[wallNum+idx] = ti.Vector([30.0, 0.0])
                 alpha[wallNum+idx, 0] = 1.0
+                alpha[wallNum+idx, 1] = 0.0
+            
+            for idx in range(cur_n[None]-10, cur_n[None]-5):
+                pos[wallNum+idx] = ti.Vector([0.95 * boundX, 0.8 * boundY + (cur_n[None] - idx - 5) * 0.65])
+                vel[wallNum+idx] = ti.Vector([-40.0, 0.0])
+                alpha[wallNum+idx, 0] = 0.0
+                alpha[wallNum+idx, 1] = 1.0
         
         for _ in range(substep):
             neighbor_search()
@@ -339,23 +325,19 @@ if __name__ == '__main__':
             check_alpha()
             cal_acc()
             advect()
+            pass
 
-        f = open(f"out/jsonfile/water_{cur_frame}.json", "w")
-        f.write("[\n")
-        for i in range(wallNum, wallNum+cur_n[None]-1):
-            f.write(f"[{pos[i][0]}, {pos[i][1]}, 0],\n")
-        f.write(f"[{pos[wallNum+cur_n[None]-1][0]}, {pos[wallNum+cur_n[None]-1][1]}, 0]\n")
-        f.write("]")
+        pre_render()
+        series_prefix = "out/plyfile/water_.ply"
+        np_pos = particle_pos.to_numpy()
+        np_palette = palette.to_numpy()
+        writer = ti.tools.PLYWriter(num_vertices = cur_n[None])
+        writer.add_vertex_pos(np_pos[:cur_n[None], 0], np_pos[:cur_n[None], 1], np_pos[:cur_n[None], 2])
+        writer.add_vertex_color(np_palette[:cur_n[None], 0], np_palette[:cur_n[None], 1], np_palette[:cur_n[None], 2])
+        writer.export_frame_ascii(cur_frame, series_prefix)
         cur_frame += 1
-        # pre_render()
-        # pos_show = pos.to_numpy()
-        # palette_show = palette.to_numpy()
-        # pos_show[:, 0] *= 1.0 / boundX
-        # pos_show[:, 1] *= 1.0 / boundY
-        # roll = math.ceil((cur_n[None] + wallNum) / 255)
-        # for i in range(roll): # you can render up to 255 circles at one time
-        #     left = i * 255
-        #     right = min(cur_n[None] + wallNum, (i+1)*255)
-        #     gui.circles(pos_show[left:right, :], radius=3, palette=palette_show[left:right], palette_indices=[i for i in range(right-left)])
-        # gui.show()
+        print(cur_frame)
+        if cur_frame == 2400:
+            exit()
+
     
