@@ -1,4 +1,5 @@
 .vscode
 *.ini
-out
+out_*
 test-ply
+*.msh
