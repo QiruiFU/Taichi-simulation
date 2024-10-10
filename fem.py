@@ -4,8 +4,8 @@ import meshio
 ti.init(arch=ti.gpu)
 
 g = ti.Vector([0, 0, -9.8])
-Young = 5000
-Poisson = 0.3
+Young = 50000
+Poisson = 0.45
 miu = Young / (2 + 2 * Poisson)
 lam = Young * Poisson / ((1 + Poisson) * (1 - 2 * Poisson))
 dt = 0.001
@@ -26,7 +26,7 @@ def contain(tet, p):
 @ti.kernel
 def init():
     for i in range(NumPoint):
-        pos[i] += ti.Vector([0.0, 0.0, 20.0])
+        pos[i] += ti.Vector([0.0, 0.0, 5.0])
         vel[i] = ti.Vector([0.0, 0.0, 0.0])
         acc[i] = ti.Vector([0.0, 0.0, 0.0])
     
@@ -97,7 +97,7 @@ def advance():
 
 if __name__ == "__main__":
     # initiate
-    mesh = meshio.read("penguin.msh")
+    mesh = meshio.read("frog.msh")
     points = mesh.points
     cells = mesh.cells_dict['tetra']
     NumPoint = len(points)
