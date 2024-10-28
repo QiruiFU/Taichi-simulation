@@ -1,6 +1,7 @@
 .vscode
 *.ini
 out_*
+out
 test-ply
 *.msh
 __pycache__

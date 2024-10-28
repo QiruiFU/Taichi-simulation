@@ -2,38 +2,38 @@ import taichi as ti
 
 @ti.data_oriented
 class CGSolver:
-    def __init__(self, m, n, div, u, v, cell_type):
-        self.m = m
+    def __init__(self, n, div, u, v, w, cell_type):
         self.n = n
         self.div = div
         self.u = u
         self.v = v
+        self.w = w
         self.cell_type = cell_type
 
         # rhs of linear system
-        self.b = ti.field(dtype=ti.f32, shape=(self.m, self.n))
+        self.b = ti.field(dtype=ti.f32, shape=(self.n, self.n, self.n))
 
         # lhs of linear system
-        self.A = ti.field(dtype=ti.f32, shape=(self.m, self.n, 5))
+        self.A = ti.field(dtype=ti.f32, shape=(self.n, self.n, self.n, 7))
         # self.Adiag = ti.field(dtype=ti.f32, shape=(self.m, self.n))
         # self.Ax = ti.field(dtype=ti.f32, shape=(self.m, self.n))
         # self.Ay = ti.field(dtype=ti.f32, shape=(self.m, self.n))
 
         # cg var
-        self.p = ti.field(dtype=ti.f32, shape=(self.m, self.n))
-        self.r = ti.field(dtype=ti.f32, shape=(self.m, self.n))
-        self.x = ti.field(dtype=ti.f32, shape=(self.m, self.n))
-        self.Ap = ti.field(dtype=ti.f32, shape=(self.m, self.n))
+        self.p = ti.field(dtype=ti.f32, shape=(self.n, self.n, self.n))
+        self.r = ti.field(dtype=ti.f32, shape=(self.n, self.n, self.n))
+        self.x = ti.field(dtype=ti.f32, shape=(self.n, self.n, self.n))
+        self.Ap = ti.field(dtype=ti.f32, shape=(self.n, self.n, self.n))
         self.sum = ti.field(dtype=ti.f32, shape=())
         self.alpha = ti.field(dtype=ti.f32, shape=())
         self.beta = ti.field(dtype=ti.f32, shape=())
         
 
     @ti.func
-    def GetGridMark(self, x, y):
+    def GetGridMark(self, x, y, z):
         res = 2
-        if 0 <= x < self.m and 0 <= y < self.n:
-            res = self.cell_type[x, y]
+        if 0 <= x < self.n and 0 <= y < self.n and 0 <= z < self.n:
+            res = self.cell_type[x, y, z]
         else:
             res = 2
     
@@ -43,47 +43,62 @@ class CGSolver:
     @ti.kernel
     def system_init_kernel(self, scale_A: ti.f32, scale_b: ti.f32):
         #define right hand side of linear system
-        for i, j in ti.ndrange(self.m, self.n):
-            if self.GetGridMark(i, j) == 1:
-                self.b[i, j] = -self.div[i, j]
+        for i, j, k in ti.ndrange(self.n, self.n, self.n):
+            if self.GetGridMark(i, j, k) == 1:
+                self.b[i, j, k] = -self.div[i, j, k]
 
         #modify right hand side of linear system to account for solid velocities
         #currently hard code solid velocities to zero
-        for i, j in ti.ndrange(self.m, self.n):
-            if self.GetGridMark(i, j) == 1:
-                if self.GetGridMark(i - 1, j) == 2:
-                    self.b[i, j] -= scale_b * (self.u[i, j] - 0)
-                if self.GetGridMark(i + 1, j) == 2:
-                    self.b[i, j] += scale_b * (self.u[i + 1, j] - 0)
+        for i, j, k in ti.ndrange(self.n, self.n, self.n):
+            if self.GetGridMark(i, j, k) == 1:
+                if self.GetGridMark(i - 1, j, k) == 2:
+                    self.b[i, j, k] -= scale_b * (self.u[i, j, k] - 0)
+                if self.GetGridMark(i + 1, j, k) == 2:
+                    self.b[i, j, k] += scale_b * (self.u[i + 1, j, k] - 0)
 
-                if self.GetGridMark(i, j - 1) == 2:
-                    self.b[i, j] -= scale_b * (self.v[i, j] - 0)
-                if self.GetGridMark(i, j + 1) == 2:
-                    self.b[i, j] += scale_b * (self.v[i, j + 1] - 0)
+                if self.GetGridMark(i, j - 1, k) == 2:
+                    self.b[i, j, k] -= scale_b * (self.v[i, j, k] - 0)
+                if self.GetGridMark(i, j + 1, k) == 2:
+                    self.b[i, j, k] += scale_b * (self.v[i, j + 1, k] - 0)
+                
+                if self.GetGridMark(i, j, k - 1) == 2:
+                    self.b[i, j, k] -= scale_b * (self.w[i, j, k] - 0)
+                if self.GetGridMark(i, j, k + 1) == 2:
+                    self.b[i, j, k] += scale_b * (self.w[i, j, k + 1] - 0)
 
         # define left handside of linear system
-        for i, j in ti.ndrange(self.m, self.n):
-            if self.GetGridMark(i, j) == 1:
-                self.A[i, j, 0] = 4 * scale_A
-                if self.GetGridMark(i - 1, j) == 1:
-                    self.A[i, j, 1] -= scale_A
-                elif self.GetGridMark(i - 1, j) == 2:
-                    self.A[i, j, 0] -= scale_A
+        for i, j, k in ti.ndrange(self.n, self.n, self.n):
+            if self.GetGridMark(i, j, k) == 1:
+                self.A[i, j, k, 0] = 6 * scale_A
+                if self.GetGridMark(i - 1, j, k) == 1:
+                    self.A[i, j, k, 1] -= scale_A
+                elif self.GetGridMark(i - 1, j, k) == 2:
+                    self.A[i, j, k, 0] -= scale_A
 
-                if self.GetGridMark(i, j + 1) == 1:
-                    self.A[i, j, 2] -= scale_A
-                elif self.GetGridMark(i, j + 1) == 2:
-                    self.A[i, j, 0] -= scale_A
+                if self.GetGridMark(i, j + 1, k) == 1:
+                    self.A[i, j, k, 2] -= scale_A
+                elif self.GetGridMark(i, j + 1, k) == 2:
+                    self.A[i, j, k, 0] -= scale_A
 
-                if self.GetGridMark(i + 1, j) == 1:
-                    self.A[i, j, 3] -= scale_A
-                elif self.GetGridMark(i + 1, j) == 2:
-                    self.A[i, j, 0] -= scale_A
+                if self.GetGridMark(i + 1, j, k) == 1:
+                    self.A[i, j, k, 3] -= scale_A
+                elif self.GetGridMark(i + 1, j, k) == 2:
+                    self.A[i, j, k, 0] -= scale_A
 
-                if self.GetGridMark(i, j - 1) == 1:
-                    self.A[i, j, 4] -= scale_A
-                elif self.GetGridMark(i, j - 1) == 2:
-                    self.A[i, j, 0] -= scale_A
+                if self.GetGridMark(i, j - 1, k) == 1:
+                    self.A[i, j, k, 4] -= scale_A
+                elif self.GetGridMark(i, j - 1, k) == 2:
+                    self.A[i, j, k, 0] -= scale_A
+
+                if self.GetGridMark(i, j, k - 1) == 1:
+                    self.A[i, j, k, 5] -= scale_A
+                elif self.GetGridMark(i, j, k - 1) == 2:
+                    self.A[i, j, k, 0] -= scale_A
+
+                if self.GetGridMark(i, j, k + 1) == 1:
+                    self.A[i, j, k, 6] -= scale_A
+                elif self.GetGridMark(i, j, k + 1) == 2:
+                    self.A[i, j, k, 0] -= scale_A
 
 
     def system_init(self, scale_A, scale_b):
@@ -146,47 +161,52 @@ class CGSolver:
     @ti.kernel
     def reduce(self, p: ti.template(), q: ti.template()):
         self.sum[None] = 0.0
-        for i, j in ti.ndrange(self.m, self.n):
-            if self.GetGridMark(i, j) == 1:
-                self.sum[None] += p[i, j] * q[i, j]
+        for i, j, k in ti.ndrange(self.n, self.n, self.n):
+            if self.GetGridMark(i, j, k) == 1:
+                self.sum[None] += p[i, j, k] * q[i, j, k]
 
     @ti.kernel
     def compute_Ap(self):
-        for i, j in ti.ndrange(self.m, self.n):
-            if self.GetGridMark(i, j) == 1:
-                self.Ap[i, j] = self.A[i, j, 0] * self.p[i, j] \
-                                + self.A[i, j, 1] * self.p[i - 1, j] \
-                                + self.A[i, j, 2] * self.p[i, j + 1] \
-                                + self.A[i, j, 3] * self.p[i + 1, j] \
-                                + self.A[i, j, 4] * self.p[i, j - 1]
+        for i, j, k in ti.ndrange(self.n, self.n, self.n):
+            if self.GetGridMark(i, j, k) == 1:
+                self.Ap[i, j, k] = self.A[i, j, k, 0] * self.p[i, j, k] \
+                                + self.A[i, j, k, 1] * self.p[i - 1, j, k] \
+                                + self.A[i, j, k, 2] * self.p[i, j + 1, k] \
+                                + self.A[i, j, k, 3] * self.p[i + 1, j, k] \
+                                + self.A[i, j, k, 4] * self.p[i, j - 1, k] \
+                                + self.A[i, j, k, 5] * self.p[i, j, k - 1] \
+                                + self.A[i, j, k, 6] * self.p[i, j, k + 1] 
+
 
     @ti.kernel
     def update_x(self):
-        for i, j in ti.ndrange(self.m, self.n):
-            if self.GetGridMark(i, j) == 1:
-                self.x[i, j] = self.x[i, j] + self.alpha[None] * self.p[i, j]
+        for i, j, k in ti.ndrange(self.n, self.n, self.n):
+            if self.GetGridMark(i, j, k) == 1:
+                self.x[i, j, k] = self.x[i, j, k] + self.alpha[None] * self.p[i, j, k]
 
 
     @ti.kernel
     def update_r(self):
-        for i, j in ti.ndrange(self.m, self.n):
-            if self.GetGridMark(i, j) == 1:
-                self.r[i, j] = self.r[i, j] - self.alpha[None] * self.Ap[i, j]
+        for i, j, k in ti.ndrange(self.n, self.n, self.n):
+            if self.GetGridMark(i, j, k) == 1:
+                self.r[i, j, k] = self.r[i, j, k] - self.alpha[None] * self.Ap[i, j, k]
 
     @ti.kernel
     def update_p(self):
-        for i, j in ti.ndrange(self.m, self.n):
-            if self.GetGridMark(i, j) == 1:
-                self.p[i, j] = self.r[i, j] + self.beta[None] * self.p[i, j]
+        for i, j, k in ti.ndrange(self.n, self.n, self.n):
+            if self.GetGridMark(i, j, k) == 1:
+                self.p[i, j, k] = self.r[i, j, k] + self.beta[None] * self.p[i, j, k]
 
     
     @ti.kernel
     def compute_r(self):
-        for i, j in ti.ndrange(self.m, self.n):
-            if self.GetGridMark(i, j) == 1:
-                self.r[i, j] = self.b[i, j] \
-                                - self.A[i, j, 0] * self.x[i, j] \
-                                - self.A[i, j, 1] * self.x[i - 1, j] \
-                                - self.A[i, j, 2] * self.x[i, j + 1] \
-                                - self.A[i, j, 3] * self.x[i + 1, j] \
-                                - self.A[i, j, 4] * self.x[i, j - 1]
+        for i, j, k in ti.ndrange(self.n, self.n, self.n):
+            if self.GetGridMark(i, j, k) == 1:
+                self.r[i, j, k] = self.b[i, j, k] \
+                                - self.A[i, j, k, 0] * self.x[i, j, k] \
+                                - self.A[i, j, k, 1] * self.x[i - 1, j, k] \
+                                - self.A[i, j, k, 2] * self.x[i, j + 1, k] \
+                                - self.A[i, j, k, 3] * self.x[i + 1, j, k] \
+                                - self.A[i, j, k, 4] * self.x[i, j - 1, k] \
+                                + self.A[i, j, k, 5] * self.p[i, j, k - 1] \
+                                + self.A[i, j, k, 6] * self.p[i, j, k + 1] 

@@ -6,7 +6,7 @@ import time
 
 ti.init(arch=ti.gpu)
 show_type = 0
-visualization = 1
+visualization = 0
 
 # parameters
 particle_radius = 1.0
