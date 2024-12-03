@@ -5,3 +5,4 @@ out
 test-ply
 *.msh
 __pycache__
+*.txt
