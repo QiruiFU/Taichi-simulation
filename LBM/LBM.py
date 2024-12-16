@@ -18,17 +18,15 @@ class lbm_solver:
     def __init__(
         self,
         name, # name of the flow case
-        nx,  # domain size
-        ny,
         bc_type,  # [left,top,right,bottom] boundary conditions: 0 -> Dirichlet ; 1 -> Neumann
         bc_value,  # if bc_type = 0, we need to specify the velocity in bc_value
         ):
         self.name = name
-        self.nx = nx  # by convention, dx = dy = dt = 1.0 (lattice units)
-        self.ny = ny
+        self.nx = 301 
+        self.ny = 301 
         self.W = 7.5
         self.rho_l = 1000.0 # density of water
-        self.rho_v = 900.0 # density of vapor
+        self.rho_v = 100.0 # density of vapor
         self.sigma = 1e-4
         self.tau_phi = 0.5
         self.k_water = 0.68
@@ -36,17 +34,17 @@ class lbm_solver:
         self.Cp_water = 4.217
         self.Cp_vapor = 1.009
 
-        self.rho = ti.field(float, shape=(nx, ny))
-        self.phi = ti.field(float, shape=(nx, ny))
-        self.vel = ti.Vector.field(2, float, shape=(nx, ny))
-        self.old_temperature = ti.field(float, shape=(nx, ny))
-        self.new_temperature = ti.field(float, shape=(nx, ny))
+        self.rho = ti.field(float, shape=(self.nx, self.ny))
+        self.phi = ti.field(float, shape=(self.nx, self.ny))
+        self.vel = ti.Vector.field(2, float, shape=(self.nx, self.ny))
+        self.old_temperature = ti.field(float, shape=(self.nx, self.ny))
+        self.new_temperature = ti.field(float, shape=(self.nx, self.ny))
 
-        self.h_old = ti.Vector.field(9, float, shape=(nx, ny))
-        self.h_new = ti.Vector.field(9, float, shape=(nx, ny))
-        self.g_old = ti.Vector.field(9, float, shape=(nx, ny))
-        self.g_new = ti.Vector.field(9, float, shape=(nx, ny))
-        self.p_star = ti.field(float, shape=(nx, ny))
+        self.h_old = ti.Vector.field(9, float, shape=(self.nx, self.ny))
+        self.h_new = ti.Vector.field(9, float, shape=(self.nx, self.ny))
+        self.g_old = ti.Vector.field(9, float, shape=(self.nx, self.ny))
+        self.g_new = ti.Vector.field(9, float, shape=(self.nx, self.ny))
+        self.p_star = ti.field(float, shape=(self.nx, self.ny))
 
         self.w = ti.field(float, shape=9)
         self.e = ti.Vector.field(2, int, shape=9)
@@ -55,13 +53,13 @@ class lbm_solver:
         self.bc_value = ti.Vector.field(2, float, shape=4)
         self.bc_value.from_numpy(np.array(bc_value, dtype=np.float32))
 
-        self.image = ti.Vector.field(3, dtype=ti.f32, shape=(nx, ny))  # RGB image
+        self.image = ti.Vector.field(3, dtype=ti.f32, shape=(self.nx, self.ny))  # RGB image
 
-        self.phi_grad = ti.Vector.field(2, float, shape=(nx, ny))
-        self.rho_grad = ti.Vector.field(2, float, shape=(nx, ny))
-        self.vel_grad = ti.Matrix.field(2, 2, float, shape=(nx, ny))
-        self.phi_laplatian = ti.field(float, shape=(nx, ny))
-        self.vel_div = ti.field(float, shape=(nx, ny))
+        self.phi_grad = ti.Vector.field(2, float, shape=(self.nx, self.ny))
+        self.rho_grad = ti.Vector.field(2, float, shape=(self.nx, self.ny))
+        self.vel_grad = ti.Matrix.field(2, 2, float, shape=(self.nx, self.ny))
+        self.phi_laplatian = ti.field(float, shape=(self.nx, self.ny))
+        self.vel_div = ti.field(float, shape=(self.nx, self.ny))
 
     
     @ti.func
@@ -170,8 +168,6 @@ class lbm_solver:
             F_a = self.rho[i, j] * self.vel[i, j] * self.vel_div[i, j]
         
         res = F_s + F_b + F_p + F_eta + F_a
-        # if i == 124 and j==188:
-            # print("F", F_s, F_eta, F_a, self.vel[i, j])
         
         return res
 
@@ -234,7 +230,7 @@ class lbm_solver:
 
     
     @ti.func
-    def get_temp(self, i, j):
+    def GetTemp(self, i, j):
         res = 0.0
         if i < 0 or i >= self.nx or j < 0 or j >= self.ny:
             res = 0.0
@@ -247,7 +243,7 @@ class lbm_solver:
 
     
     @ti.kernel
-    def Cal_derivative(self):
+    def CalDerivative(self):
         for i, j in ti.ndrange((1, self.nx - 1), (1, self.ny - 1)):
             self.phi_grad[i, j] = self.CalPhiGrad(i, j)
             self.rho_grad[i, j] = self.CalRhoGrad(i, j)
@@ -257,7 +253,7 @@ class lbm_solver:
 
 
     @ti.kernel
-    def update_temperature(self):
+    def UpdateTemp(self):
         for i, j in ti.ndrange(self.nx, self.ny):
             X_water = self.k_water / (self.rho[i, j] * self.Cp_water)
             X_vapor = self.k_vapor / (self.rho[i, j] * self.Cp_vapor)
@@ -269,17 +265,68 @@ class lbm_solver:
             else :
                 X = 0.5 * (X_vapor + X_water)
             
-            laplacian = self.get_temp(i+1, j) + self.get_temp(i-1, j) + self.get_temp(i, j+1) + self.get_temp(i, j-1)\
-                        - 4 * self.get_temp(i, j)
-            Tgrad = 0.5 * ti.Vector([self.get_temp(i+1, j)- self.get_temp(i-1, j), self.get_temp(i, j+1) - self.get_temp(i, j-1)])
-            self.new_temperature[i, j] = self.get_temp(i, j) + X * laplacian - tm.dot(Tgrad, self.vel[i, j])
+            laplacian = self.GetTemp(i+1, j) + self.GetTemp(i-1, j) + self.GetTemp(i, j+1) + self.GetTemp(i, j-1)\
+                        - 4 * self.GetTemp(i, j)
+            Tgrad = 0.5 * ti.Vector([self.GetTemp(i+1, j)- self.GetTemp(i-1, j), self.GetTemp(i, j+1) - self.GetTemp(i, j-1)])
+            self.new_temperature[i, j] = self.GetTemp(i, j) + X * laplacian - tm.dot(Tgrad, self.vel[i, j])
             
         for i, j in ti.ndrange(self.nx, self.ny):
             self.old_temperature[i, j] = self.new_temperature[i, j]
 
+
+    @ti.kernel
+    def Collision(self):
+        for i, j in ti.ndrange((0, self.nx), (0, self.ny)):
+            for k in ti.static(range(9)):
+                # ---- update phi ----
+                heq = self.h_eq(i, j, k)
+
+                # formula (22)
+                self.h_old[i, j][k] = self.h_old[i, j][k] - (self.h_old[i, j][k] - heq) / self.tau_phi
+
+                R = 0.0
+                F = 0.0
+
+                if self.is_INB(i, j):
+
+                    # formula (24)
+                    R = tm.dot(self.w[k] * self.e[k], 4 * self.phi[i, j] * (1 - self.phi[i, j]) / self.W * tm.normalize(self.phi_grad[i, j]))
+                    # formula (25)
+                    F = self.w[k] * (1 + 3 * (tm.dot(self.e[k], self.vel[i, j]) * (self.tau_phi - 0.5) / self.tau_phi))
+                    F *= -self.CalM(i, j) / self.rho_l
+
+                    self.h_old[i, j][k] += (2 * self.tau_phi - 1) / (2 * self.tau_phi) * R + F
+
+                
+                # ---- update vel ----
+                geq = self.g_eq(i, j, k)
+                self.g_old[i, j][k] = self.g_old[i, j][k] - (self.g_old[i, j][k] - geq) / self.tau_phi
+
+                P = 0.0
+                if self.is_INB(i, j):
+                    # formula(32)
+                    P = self.w[k] * self.CalM(i, j) * (1 / self.rho_v - 1 / self.rho_l)
+
+                # formula(33)
+                G = 3 * self.w[k] * tm.dot(ti.Vector([self.e[k][0], self.e[k][1]]), self.CalF(i, j)) / self.rho[i, j]
+
+                # formula(31)
+                tau = self.tau_phi
+                self.g_old[i, j][k] += (2 * tau - 1) / (2 * tau) * G + P
+    
+
+    @ti.kernel
+    def Advection(self):
+        for i, j in ti.ndrange((1, self.nx - 1), (1, self.ny - 1)):
+            for k in ti.static(range(9)):
+                i_source = i - self.e[k][0]
+                j_source = j - self.e[k][1]
+                self.h_new[i, j][k] = self.h_old[i_source, j_source][k]
+                self.g_new[i, j][k] = self.g_old[i_source, j_source][k]
+
     
     @ti.kernel
-    def update_phi(self):
+    def UpdatePhi(self):
         for i, j in ti.ndrange((1, self.nx - 1), (1, self.ny - 1)):
             for k in ti.static(range(9)):
                 i_s = i - self.e[k][0]
@@ -304,7 +351,7 @@ class lbm_solver:
 
 
     @ti.kernel
-    def update_vel(self):
+    def UpdateVel(self):
         for i, j in ti.ndrange((1, self.nx - 1), (1, self.ny - 1)):
             for k in ti.static(range(9)):
                 i_s = i - self.e[k][0]
@@ -327,26 +374,26 @@ class lbm_solver:
 
 
     @ti.kernel
-    def apply_bc(self):  # impose boundary conditions
+    def ApplyBc(self):  # impose boundary conditions
         # left and right
         for j in range(1, self.ny - 1):
             # left: dr = 0; ibc = 0; jbc = j; inb = 1; jnb = j
-            self.apply_bc_core(1, 0, 0, j, 1, j)
+            self.ApplyBcCore(1, 0, 0, j, 1, j)
 
             # right: dr = 2; ibc = nx-1; jbc = j; inb = nx-2; jnb = j
-            self.apply_bc_core(1, 2, self.nx - 1, j, self.nx - 2, j)
+            self.ApplyBcCore(1, 2, self.nx - 1, j, self.nx - 2, j)
 
         # top and bottom
         for i in range(self.nx):
             # top: dr = 1; ibc = i; jbc = ny-1; inb = i; jnb = ny-2
-            self.apply_bc_core(1, 1, i, self.ny - 1, i, self.ny - 2)
+            self.ApplyBcCore(1, 1, i, self.ny - 1, i, self.ny - 2)
 
             # bottom: dr = 3; ibc = i; jbc = 0; inb = i; jnb = 1
-            self.apply_bc_core(1, 3, i, 0, i, 1)
+            self.ApplyBcCore(1, 3, i, 0, i, 1)
 
 
     @ti.func
-    def apply_bc_core(self, outer, dr, ibc, jbc, inb, jnb):
+    def ApplyBcCore(self, outer, dr, ibc, jbc, inb, jnb):
         if outer == 1:  # handle outer boundary
             if self.bc_type[dr] == 0:
                 self.vel[ibc, jbc] = self.bc_value[dr]
@@ -361,7 +408,7 @@ class lbm_solver:
 
 
     @ti.kernel
-    def macro_vari(self):
+    def MacroVari(self):
         for i, j in ti.ndrange((1, self.nx - 1), (1, self.ny - 1)):
             self.phi[i, j] = 0.0 
             for k in ti.static(range(9)):
@@ -383,16 +430,13 @@ class lbm_solver:
         for i, j in ti.ndrange((1, self.nx - 1), (1, self.ny - 1)):
             FF = self.CalF(i, j)
             self.vel[i, j] = FF / (2.0 * self.rho[i, j])
-            # temp = self.vel[i, j]
             for k in ti.static(range(9)):
                 self.vel[i, j] += self.g_new[i, j][k] * ti.Vector([self.e[k][0], self.e[k][1]])
             self.g_old[i, j] = self.g_new[i, j]
-            # if i==124 and j==188:
-                # print("vel", temp, FF, self.rho[i, j])
 
 
     @ti.kernel
-    def update_image(self):
+    def UpdateImage(self):
         col_l = ti.Vector([0.0, 0.0, 0.8])
         col_v = ti.Vector([0.0, 0.8, 0.0])
         for i, j in self.old_temperature:
@@ -400,7 +444,7 @@ class lbm_solver:
     
 
     @ti.kernel
-    def Cal_r(self) -> int:
+    def CalR(self) -> int:
         res = 0
         for i in range(self.ny):
             cnt = 0
@@ -413,56 +457,28 @@ class lbm_solver:
         return res
     
 
-    @ti.kernel
-    def check(self):
-        check_vel = False
-        check_phi = False
-        check_h = False
-        check_g = False
-        for i, j in ti.ndrange(self.nx, self.ny):
-            if tm.isnan(self.vel[i, j][0]) or tm.isnan(self.vel[i, j][1]):
-                # print("vel nan", i, j)
-                check_vel = True
-            
-            if tm.isnan(self.phi[i, j]):
-                check_phi = True
-
-            for k in range(9):
-                if tm.isnan(self.h_old[i, j][k]):
-                    check_h = True
-
-                if tm.isnan(self.g_old[i, j][k]):
-                    check_g = True
-        
-        # print(check_vel, check_phi, check_h, check_g)
-
-    
     def solve(self):
         gui = ti.GUI(self.name, (self.nx, self.ny))
         self.init()
         frame = 0
         max_r = 0
         while not gui.get_event(ti.GUI.ESCAPE, ti.GUI.EXIT):
-            # print(frame)
             sys.stdout.flush()
             frame += 1
-            # self.update_temperature()
-            self.Cal_derivative()
-            self.update_phi()
-            self.update_vel()
-            self.macro_vari()
-            self.apply_bc()
-            self.check()
+            # self.UpdateTemp()
+            self.CalDerivative()
+            self.Collision()
+            self.Advection()
+            self.MacroVari()
+            # self.ApplyBc()
 
-            # print(self.Cal_r())
-            # print()
-            cur_r = self.Cal_r()
+            cur_r = self.CalR()
             if cur_r > max_r:
                 max_r = cur_r
                 print(frame, cur_r)
-                print(self.phi[150, 60])
+                print(self.phi[150, 100])
             
-            self.update_image()
+            self.UpdateImage()
             gui.set_image(self.image)
             gui.show()
 
@@ -470,8 +486,6 @@ class lbm_solver:
 if __name__ == '__main__':
     lbm = lbm_solver(
         name = "LBM",
-        nx = 301,
-        ny = 301,
         bc_type = [0, 0, 0, 0],
         bc_value = [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0]]
     )
