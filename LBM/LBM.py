@@ -28,7 +28,7 @@ class lbm_solver:
         self.ny = ny
         self.W = 7.5
         self.rho_l = 1000.0 # density of water
-        self.rho_v = 100.0 # density of vapor
+        self.rho_v = 900.0 # density of vapor
         self.sigma = 1e-4
         self.tau_phi = 0.5
         self.k_water = 0.68
@@ -151,18 +151,19 @@ class lbm_solver:
         kappa = 1.5 * self.W
         phi = self.phi[i, j]
         miu = 2.0 * beta * phi * (1 - phi) * (1 - 2.0 * phi) - kappa * self.phi_laplatian[i, j]
-        F_s = miu * self.phi_grad[i, j]
-        # F_s = ti.Vector([0.0, 0.0])
+        # F_s = miu * self.phi_grad[i, j]
+        F_s = ti.Vector([0.0, 0.0])
 
         # F_b = (self.rho_l - self.rho[i, j]) * ti.Vector([0.0, -10.0])
         F_b = ti.Vector([0.0, 0.0])
 
-        F_p = - self.p_star[i, j] * self.rho_grad[i, j] / 3.0
-        # F_p = ti.Vector([0.0, 0.0])
+        # F_p = - self.p_star[i, j] * self.rho_grad[i, j] / 3.0
+        F_p = ti.Vector([0.0, 0.0])
 
         niu = (self.tau_phi - 0.5) / 3.0
         u_grad = self.vel_grad[i, j]
         F_eta = niu * (u_grad + u_grad.transpose()) @ self.rho_grad[i, j]
+        # F_eta = ti.Vector([0.0, 0.0])
 
         F_a = ti.Vector([0.0, 0.0])
         if i!=0 and i!=self.nx-1 and j!=0 and j!=self.ny-1:
@@ -284,9 +285,6 @@ class lbm_solver:
                 i_s = i - self.e[k][0]
                 j_s = j - self.e[k][1]
                 heq = self.h_eq(i_s, j_s, k)
-                # eu = tm.dot(self.e[k], self.vel[i_s, j_s])
-                # uv = tm.dot(self.vel[i_s, j_s], self.vel[i_s, j_s])
-                # heq = self.w[k] * self.phi[i_s, j_s] * (1.0 + 3.0 * eu + 4.5 * eu * eu - 1.5 * uv)
 
                 # formula (22)
                 self.h_new[i, j][k] = self.h_old[i_s, j_s][k] - (self.h_old[i_s, j_s][k] - heq) / self.tau_phi
@@ -313,18 +311,19 @@ class lbm_solver:
                 j_s = j - self.e[k][1]
                 geq = self.g_eq(i_s, j_s, k)
 
-                self.g_new[i, j][k] = self.g_old[i_s, j_s][k] - (self.g_old[i_s, j_s][k] - geq) / self.tau_phi
-                # # formula(32)
-                # P = self.w[k] * self.CalM(i_s, j_s) * (1 / self.rho_v - 1 / self.rho_l)
+                P = 0.0
+                if self.is_INB(i, j):
+                    # formula(32)
+                    P = self.w[k] * self.CalM(i_s, j_s) * (1 / self.rho_v - 1 / self.rho_l)
 
-                # # formula(33)
-                # G = 3 * self.w[k] * tm.dot(ti.Vector([self.e[k][0], self.e[k][1]]), self.CalF(i_s, j_s)) / self.rho[i_s, j_s]
+                # formula(33)
+                G = 3 * self.w[k] * tm.dot(ti.Vector([self.e[k][0], self.e[k][1]]), self.CalF(i_s, j_s)) / self.rho[i_s, j_s]
 
-                # # formula(31)
-                # # tau = self.phi[i_s, j_s] * self.tau_phi + (1 - self.phi[i_s, j_s]) * self.tau_phi
-                # tau = self.tau_phi
-                # self.g_new[i, j][k] = self.g_old[i_s, j_s][k] - (self.g_old[i_s, j_s][k] - geq) / tau
-                # self.g_new[i, j][k] += (2 * tau - 1) / (2 * tau) * G + P
+                # formula(31)
+                # tau = self.phi[i_s, j_s] * self.tau_phi + (1 - self.phi[i_s, j_s]) * self.tau_phi
+                tau = self.tau_phi
+                self.g_new[i, j][k] = self.g_old[i_s, j_s][k] - (self.g_old[i_s, j_s][k] - geq) / tau
+                self.g_new[i, j][k] += (2 * tau - 1) / (2 * tau) * G + P
 
 
     @ti.kernel
@@ -435,15 +434,16 @@ class lbm_solver:
                 if tm.isnan(self.g_old[i, j][k]):
                     check_g = True
         
-        print(check_vel, check_phi, check_h, check_g)
+        # print(check_vel, check_phi, check_h, check_g)
 
     
     def solve(self):
         gui = ti.GUI(self.name, (self.nx, self.ny))
         self.init()
         frame = 0
+        max_r = 0
         while not gui.get_event(ti.GUI.ESCAPE, ti.GUI.EXIT):
-            print(frame)
+            # print(frame)
             sys.stdout.flush()
             frame += 1
             # self.update_temperature()
@@ -454,8 +454,13 @@ class lbm_solver:
             self.apply_bc()
             self.check()
 
-            print(self.Cal_r())
-            print()
+            # print(self.Cal_r())
+            # print()
+            cur_r = self.Cal_r()
+            if cur_r > max_r:
+                max_r = cur_r
+                print(frame, cur_r)
+                print(self.phi[150, 60])
             
             self.update_image()
             gui.set_image(self.image)
