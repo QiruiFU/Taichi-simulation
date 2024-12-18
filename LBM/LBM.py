@@ -58,6 +58,11 @@ class lbm_solver:
         self.phi_laplatian = ti.field(float, shape=(self.nx, self.ny))
         self.vel_div = ti.field(float, shape=(self.nx, self.ny))
 
+        self.k_water = 0.68
+        self.k_vapor = 0.0304
+        self.Cp_water = 4.217
+        self.Cp_vapor = 1.009
+
     
     @ti.func
     def is_INB(self, x, y, k):
@@ -144,14 +149,38 @@ class lbm_solver:
     
 
     @ti.func
-    def CalMFlux(self, i, j, k):
+    def CalMFlux(self, x, y, k):
         res = 0.0
-        if self.is_INB(i, j, k):
-            res = 5e-1
-            # T_grad = 0.5 * ti.Vector([self.old_temperature[i + 1, j] - self.old_temperature[i - 1, j],
-            #                         self.old_temperature[i, j + 1] - self.old_temperature[i, j - 1]])
-            # normal = self.CalPhiGrad(i, j).normalized()
-            # h_fg = 2260000.0
+        if self.is_INB(x, y, k):
+            # res = 5e-1
+
+            bx, by = x - self.e[k][0], y - self.e[k][1]
+            nx, ny = x + self.e[k][0], y + self.e[k][1]
+            T1 = 373.15
+            T2 = self.old_temperature[bx, by]
+            T1_v = self.old_temperature[x, y]
+
+            u = (0.5 - self.phi[x, y]) / (self.phi[nx, ny] - self.phi[x, y])
+            T0 = (2.0 * T1 + (u - 1.0) * T2) / (1 + u)
+            e_dot_T = ((1.0 + 2.0 * u) * T0 - 4.0 * u * T1_v - (1.0 - 2.0 * u) * T2) * 0.5
+
+            bx, by = x + 2 * self.e[k][0], y - 2 * self.e[k][1]
+            curx, cury = x + self.e[k][0], y + self.e[k][1]
+            nx, ny = x, y
+            T1 = 373.15
+            T2 = self.old_temperature[bx, by]
+            T1_v = self.old_temperature[curx, cury]
+
+            u = (0.5 - self.phi[x, y]) / (self.phi[nx, ny] - self.phi[x, y])
+            T0 = (2.0 * T1 + (u - 1.0) * T2) / (1 + u)
+            e_dot_T_inv = ((1.0 + 2.0 * u) * T0 - 4.0 * u * T1_v - (1.0 - 2.0 * u) * T2) * 0.5
+            
+            h_fg = 2260000.0
+            if self.phi[x, y] < 0.5:
+                res = (-self.k_vapor * e_dot_T + self.k_water * e_dot_T_inv) / (h_fg * self.e[k].normalized())
+            else:
+                res = (self.k_water * e_dot_T - self.k_vapor * e_dot_T_inv) / (h_fg * self.e[k].normalized())
+
         else:
             res = 0.0
         
@@ -199,7 +228,7 @@ class lbm_solver:
         # F_s = miu * self.phi_grad[i, j]
         F_s = ti.Vector([0.0, 0.0])
 
-        # F_b = (self.rho_l - self.rho[i, j]) * ti.Vector([0.0, -10.0])
+        # F_b = (self.rho_l - self.rho[i, j]) * ti.Vector([0.0, 0.0001])
         F_b = ti.Vector([0.0, 0.0])
 
         # F_p = - self.p_star[i, j] * self.rho_grad[i, j] / 3.0
@@ -259,36 +288,52 @@ class lbm_solver:
         self.w[7] = 1.0 / 36.0
         self.w[8] = 1.0 / 36.0
 
-        mid_x = self.nx // 2
-        mid_y = self.ny // 2
-        r_init = self.nx / 10
+        # mid_x = self.nx // 2
+        # mid_y = self.ny // 2
+        # r_init = self.nx / 10
+
+        # for i, j in self.phi:
+        #     if (i - mid_x)**2 + (j - mid_y)**2 < r_init**2:
+        #         self.phi[i, j] = 0
+        #         self.rho[i, j] = self.rho_v
+        #     else:
+        #         self.phi[i, j] = 1
+        #         self.rho[i, j] = self.rho_l
+            
 
         for i, j in self.phi:
-            if (i - mid_x)**2 + (j - mid_y)**2 < r_init**2:
+            if j <= 5:
                 self.phi[i, j] = 0
                 self.rho[i, j] = self.rho_v
             else:
                 self.phi[i, j] = 1
                 self.rho[i, j] = self.rho_l
-            
+
             self.p_star[i, j] = 0.0
             self.vel[i, j] = ti.Vector([0.0, 0.0])
             for k in ti.static(range(9)):
                 self.h_old[i, j][k] = self.h_new[i, j][k] = self.h_eq(i, j, k)
                 self.g_old[i, j][k] = self.g_new[i, j][k] = self.g_eq(i, j, k)
                 self.p_star[i, j] += self.g_new[i, j][k]
+            
+
 
     
     @ti.func
-    def GetTemp(self, i, j):
-        res = 0.0
-        if i < 0 or i >= self.nx or j < 0 or j >= self.ny:
-            res = 0.0
-        elif j == 0:
-            res = 100.0
-        else:
-            res = self.old_temperature[i, j]
+    def GetTemp(self, x, y, k):
+        res = 0
+        if self.is_INB(x, y, k):
+            bx, by = x - self.e[k][0], y - self.e[k][1]
+            nx, ny = x + self.e[k][0], y + self.e[k][1]
+            T1 = 373.15
+            T2 = self.old_temperature[bx, by]
 
+            u = (0.5 - self.phi[x, y]) / (self.phi[nx, ny] - self.phi[x, y])
+            res = (2.0 * T1 + (u - 1.0) * T2) / (1 + u)
+        else:
+            nx, ny = x + self.e[k][0], y + self.e[k][1]
+            res = self.old_temperature[nx, ny]
+        
         return res
 
     
@@ -315,10 +360,20 @@ class lbm_solver:
             else :
                 X = 0.5 * (X_vapor + X_water)
             
-            laplacian = self.GetTemp(i+1, j) + self.GetTemp(i-1, j) + self.GetTemp(i, j+1) + self.GetTemp(i, j-1)\
-                        - 4 * self.GetTemp(i, j)
-            Tgrad = 0.5 * ti.Vector([self.GetTemp(i+1, j)- self.GetTemp(i-1, j), self.GetTemp(i, j+1) - self.GetTemp(i, j-1)])
-            self.new_temperature[i, j] = self.GetTemp(i, j) + X * laplacian - tm.dot(Tgrad, self.vel[i, j])
+            X = 0.1
+
+            laplacian = 0.0
+            Tgrad = ti.Vector([0.0, 0.0])
+
+            inv = [0, 3, 4, 1, 2, 7, 8, 5, 6]
+
+            for k in range(9):
+                nx, ny = i + self.e[k][0], j + self.e[k][1]
+                bx, by = i - self.e[k][0], j - self.e[k][1]
+                Tgrad += 1.5 * self.w[k] * self.e[k] * (self.GetTemp(nx, ny, k) - self.GetTemp(bx, by, inv[k]))
+                laplacian += 3.0 * self.w[k] * self.e[k] * (self.GetTemp(nx, ny, k) + self.GetTemp(bx, by, inv[k]) - 2.0 * self.old_temperature[i, j])
+
+            self.new_temperature[i, j] = self.old_temperature[i, j] + X * laplacian - tm.dot(Tgrad, self.vel[i, j])
             
         for i, j in ti.ndrange(self.nx, self.ny):
             self.old_temperature[i, j] = self.new_temperature[i, j]
@@ -443,8 +498,6 @@ class lbm_solver:
             for k in ti.static(range(9)):
                 self.vel[i, j] += self.g_new[i, j][k] * ti.Vector([self.e[k][0], self.e[k][1]])
             self.g_old[i, j] = self.g_new[i, j]
-            # if i == 121 and j == 153:
-                # print(FF, self.vel[i, j])
 
 
     @ti.kernel
@@ -453,6 +506,10 @@ class lbm_solver:
         col_v = ti.Vector([0.0, 0.8, 0.0])
         for i, j in self.old_temperature:
             self.image[i, j] = self.phi[i, j] * col_l + (1 - self.phi[i, j]) * col_v 
+        
+        # for i, j in self.old_temperature:
+        #     r = self.old_temperature[i, j] / 100.0
+        #     self.image[i, j] = ti.Vector([r, 0.0, 0.0])
     
 
     @ti.kernel
@@ -483,7 +540,7 @@ class lbm_solver:
             self.Collision()
             self.Advection()
             self.MacroVari()
-            # self.ApplyBc()
+            self.ApplyBc()
 
             cur_r = self.CalR()
             if cur_r > max_r:
