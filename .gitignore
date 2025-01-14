@@ -6,3 +6,5 @@ test-ply
 *.msh
 __pycache__
 *.txt
+visual.py
+Figure_*
