@@ -24,8 +24,8 @@ class lbm_solver:
         self.rho_l = 1000.0 # density of water
         self.rho_v = 100.0 # density of vapor
         self.sigma = 1e-4
-        self.tau_phi = 0.8
-        self.tau = 0.8
+        self.tau_phi = 0.6
+        self.tau = 0.6
         self.k_water = 0.68
         self.k_vapor = 0.0304
         self.Cp_water = 4.217
@@ -54,7 +54,7 @@ class lbm_solver:
 
         self.phi_grad = ti.Vector.field(2, float, shape=(self.nx, self.ny))
         self.rho_grad = ti.Vector.field(2, float, shape=(self.nx, self.ny))
-        # self.vel_grad = ti.Matrix.field(2, 2, float, shape=(self.nx, self.ny))
+        self.vel_grad = ti.Matrix.field(2, 2, float, shape=(self.nx, self.ny))
         self.phi_laplatian = ti.field(float, shape=(self.nx, self.ny))
         self.vel_div = ti.field(float, shape=(self.nx, self.ny))
 
@@ -82,9 +82,6 @@ class lbm_solver:
             nxt_x, nxt_y = (i + self.e[k][0]) % self.nx, j + self.e[k][1]
             if nxt_y < self.ny and nxt_y >= 0 :
                 res += self.w[k] * self.phi[nxt_x, nxt_y] * self.e[k]
-            
-            # if i == 75 and j == 81:
-                # print("phi_k", k, self.phi[nxt_x, nxt_y])
             
         return 3.0 * res
 
@@ -132,7 +129,6 @@ class lbm_solver:
                 ele10 = self.vel[nxt_x, nxt_y][1] * self.e[k][0]
                 ele11 = self.vel[nxt_x, nxt_y][1] * self.e[k][1]
                 res += self.w[k] * ti.Matrix([[ele00, ele01], [ele10, ele11]])
-                # res += self.w[k] * 
             
         return 3.0 * res
 
@@ -241,15 +237,15 @@ class lbm_solver:
         F_p = - self.p_star[i, j] * self.rho_grad[i, j] / 3.0
 
         niu = (self.tau - 0.5) / 3.0
-        # u_grad = self.vel_grad[i, j]
-        # F_eta = niu * (u_grad + u_grad.transpose()) @ self.rho_grad[i, j]
-        F_eta = ti.Vector([0.0, 0.0])
-        for k in ti.static(range(9)):
-            F_eta[0] += self.e[k][0] * self.e[k][1] * (self.g_new[i, j][k] - self.g_eq(i, j, k))
-            F_eta[1] += self.e[k][0] * self.e[k][1] * (self.g_new[i, j][k] - self.g_eq(i, j, k))
-        F_eta *= -3.0 * niu / self.tau
-        F_eta[0] *= self.rho_grad[i, j][0]
-        F_eta[1] *= self.rho_grad[i, j][1]
+        u_grad = self.vel_grad[i, j]
+        F_eta = niu * (u_grad + u_grad.transpose()) @ self.rho_grad[i, j]
+        # F_eta = ti.Vector([0.0, 0.0])
+        # for k in ti.static(range(9)):
+        #     F_eta[0] += self.e[k][0] * self.e[k][1] * (self.g_new[i, j][k] - self.g_eq(i, j, k))
+        #     F_eta[1] += self.e[k][0] * self.e[k][1] * (self.g_new[i, j][k] - self.g_eq(i, j, k))
+        # F_eta *= -3.0 * niu / self.tau
+        # F_eta[0] *= self.rho_grad[i, j][0]
+        # F_eta[1] *= self.rho_grad[i, j][1]
 
         F_a = ti.Vector([0.0, 0.0])
         if j!=0 and j!=self.ny-1:
@@ -300,7 +296,8 @@ class lbm_solver:
 
 
         for i, j in self.phi:
-            height = int(0.125 * self.nx + 0.05 * self.nx * tm.sin(tm.pi * i / self.nx))
+            # height = int(0.125 * self.nx + 0.05 * self.nx * tm.sin(tm.pi * i / self.nx))
+            height = int(0.125 * self.nx)
             if j < height:
                 self.phi[i, j] = 0.0
                 self.rho[i, j] = self.rho_v
@@ -356,7 +353,7 @@ class lbm_solver:
         for i, j in ti.ndrange(self.nx, (1, self.ny - 1)):
             self.phi_grad[i, j] = self.CalPhiGrad(i, j)
             self.rho_grad[i, j] = self.CalRhoGrad(i, j)
-            # self.vel_grad[i, j] = self.CalVelGrad(i, j)
+            self.vel_grad[i, j] = self.CalVelGrad(i, j)
             self.phi_laplatian[i, j] = self.CalPhiLaplatian(i, j)
             self.vel_div[i, j] = self.CalVelDiv(i, j)
 
@@ -366,8 +363,8 @@ class lbm_solver:
         for i, j in ti.ndrange(self.nx, self.ny):
             # X_water = self.k_water / (self.rho[i, j] * self.Cp_water)
             # X_vapor = self.k_vapor / (self.rho[i, j] * self.Cp_vapor)
-            X_water = 0.005
-            X_vapor = 0.001
+            X_water = 0.05
+            X_vapor = 0.01
             X = 0.0
             if self.phi[i, j] < 0.5 : 
                 X = X_vapor
@@ -401,23 +398,20 @@ class lbm_solver:
                 # formula (22)
                 self.h_old[i, j][k] = self.h_old[i, j][k] - (self.h_old[i, j][k] - heq) / self.tau_phi
 
+                # formula (24)
                 R = 0.0
-                phi_grad = self.phi_grad[i, j]
-                # if not(phi_grad[0]==0 and phi_grad[1]==0):
-                if self.is_INB(i, j, k):
+                normal_grad = tm.normalize(self.phi_grad[i, j])
+                if (not tm.isinf(normal_grad[0])) and (not tm.isinf(normal_grad[1])): 
                     # formula (24)
-                    R = tm.dot(self.w[k] * self.e[k], 4.0 * self.phi[i, j] * (1 - self.phi[i, j]) / self.W * tm.normalize(phi_grad))
+                    R = tm.dot(self.w[k] * self.e[k], 4 * self.phi[i, j] * (1 - self.phi[i, j]) / self.W * tm.normalize(self.phi_grad[i, j]))
+                    if tm.isnan(R):
+                        R = 0
 
                 # formula (25)
                 F = self.w[k] * (1.0 + 3.0 * (tm.dot(self.e[k], self.vel[i, j]) * (self.tau_phi - 0.5) / self.tau_phi))
                 F *= -self.CalMRate(i, j) / self.rho_l
 
                 self.h_old[i, j][k] += (2.0 * self.tau_phi - 1.0) / (2.0 * self.tau_phi) * R + F
-
-                # if i == 75 and j == 81 and k == 4:
-                    # print("h_old", self.h_old[i, j][k], ", F1", F1, ", F", F, ", phi_grad", self.phi_grad[i, j])
-                    # print(self.phi[i, j], self.phi[i, j-1], self.is_INB(i, j, k))
-
                 
                 # ---- update vel ----
                 geq = self.g_eq(i, j, k)
@@ -442,9 +436,6 @@ class lbm_solver:
                 j_source = j - self.e[k][1]
                 self.h_new[i, j][k] = self.h_old[i_source, j_source][k]
                 self.g_new[i, j][k] = self.g_old[i_source, j_source][k]
-
-                # if i == 75 and j == 80:
-                    # print("h_new", self.h_new[i, j][k], "k", k)
 
     
     @ti.kernel
@@ -513,6 +504,7 @@ class lbm_solver:
             self.rho_grad[i, j] = self.CalRhoGrad(i, j)
             self.phi_laplatian[i, j] = self.CalPhiLaplatian(i, j)
             self.vel_div[i, j] = self.CalVelDiv(i, j)
+            self.vel_grad[i, j] = self.CalVelGrad(i, j)
             
         for i, j in ti.ndrange(self.nx, (1, self.ny - 1)):
             self.vel[i, j] = self.CalF(i, j) / (2.0 * self.rho[i, j])
@@ -528,7 +520,7 @@ class lbm_solver:
             col_v = ti.Vector([0.0, 0.8, 0.0])
             self.image[i, j] = self.phi[i, j] * col_l + (1 - self.phi[i, j]) * col_v 
         
-            color_strength = self.vel[i, j].norm()
+            color_strength = self.vel[i, j].norm() * 10.0
             # color_strength = 0.0
             self.image[i + self.nx, j] = ti.Vector([color_strength, color_strength, 0.0])
 
@@ -598,7 +590,7 @@ class lbm_solver:
             self.MacroVari()
             self.ApplyBc()
 
-            self.Check()
+            # self.Check()
             
             self.UpdateImage()
             gui.set_image(self.image)
