@@ -1,6 +1,6 @@
 ## Simulate multi-fluid with combination of SPH and VOF methods
 
-The implementation based on : Multiple-Fluid SPH Simulation Using a Mixture Model (Ren et al. 2014)
+The implementation based on : *Multiple-Fluid SPH Simulation Using a Mixture Model (Ren et al. 2014)*
 
 ## Videos:
 
