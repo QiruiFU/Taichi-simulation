@@ -20,12 +20,12 @@ class lbm_solver:
         self.name = name
         self.nx = 300
         self.ny = 600 
-        self.W = 6
-        self.rho_l = 1000.0 # density of water
-        self.rho_v = 100.0 # density of vapor
+        self.W = 4
+        self.rho_l = 999.0 # density of water
+        self.rho_v = 99.0 # density of vapor
         self.sigma = 1e-4
-        self.tau_phi = 0.6
-        self.tau = 0.6
+        self.tau_phi = 0.8
+        self.tau = 1.6
         self.k_water = 0.68
         self.k_vapor = 0.0304
         self.Cp_water = 4.217
@@ -100,7 +100,7 @@ class lbm_solver:
     @ti.func
     def CalRhoGradReal(self, x:float, y:float):
         x1, y1 = int(x), int(y)
-        x2, y2 = (x1 + 1) % self.nx, y1 + 1
+        x2, y2 = x1 + 1, y1 + 1
         if tm.fract(x) == 0.0:
             x2 = x1
         if tm.fract(y) == 0.0:
@@ -108,14 +108,15 @@ class lbm_solver:
 
         tx, ty = x - float(x1), y - float(y1)
 
-        rho11 = self.rho[x1, y1]
-        rho12 = self.rho[x1, y2]
-        rho21 = self.rho[x2, y1]
-        rho22 = self.rho[x2, y2]
+        rho11 = self.rho_grad[x1, y1]
+        rho12 = self.rho_grad[x1, y2]
+        rho21 = self.rho_grad[x2, y1]
+        rho22 = self.rho_grad[x2, y2]
 
-        rho_dx = (1 - ty) * (rho21 - rho11) + ty * (rho22 - rho12)
-        rho_dy = (1 - tx) * (rho12 - rho11) + tx * (rho22 - rho21)
-        return ti.Vector([rho_dx, rho_dy])
+        grad_x_1 = (1.0 - tx) * rho11 + tx * rho12
+        grad_x_2 = (1.0 - tx) * rho21 + tx * rho22
+        grad = (1.0 - ty) * grad_x_1 + ty * grad_x_2
+        return grad
 
 
     @ti.func
@@ -178,7 +179,7 @@ class lbm_solver:
             T0 = (2.0 * T1 + (u - 1.0) * T2) / (1 + u)
             e_dot_T_inv = ((1.0 + 2.0 * u) * T0 - 4.0 * u * T1_v - (1.0 - 2.0 * u) * T2) * 0.5
             
-            h_fg = 2260.0
+            h_fg = 0.4
             if self.phi[x, y] < 0.5:
                 res = (-self.k_vapor * e_dot_T + self.k_water * e_dot_T_inv) / (h_fg * self.e[k].norm())
             else:
@@ -207,7 +208,7 @@ class lbm_solver:
 
                     rho_grad = self.CalRhoGradReal(inter_x, inter_y)
                     align = tm.dot(rho_grad.normalized(), self.e[k].normalized())
-                    if align > max_inner:
+                    if ti.abs(align) > max_inner:
                         max_inner = align
                         max_idx = k
                         distribute_u = u
@@ -237,15 +238,15 @@ class lbm_solver:
         F_p = - self.p_star[i, j] * self.rho_grad[i, j] / 3.0
 
         niu = (self.tau - 0.5) / 3.0
-        u_grad = self.vel_grad[i, j]
-        F_eta = niu * (u_grad + u_grad.transpose()) @ self.rho_grad[i, j]
-        # F_eta = ti.Vector([0.0, 0.0])
-        # for k in ti.static(range(9)):
-        #     F_eta[0] += self.e[k][0] * self.e[k][1] * (self.g_new[i, j][k] - self.g_eq(i, j, k))
-        #     F_eta[1] += self.e[k][0] * self.e[k][1] * (self.g_new[i, j][k] - self.g_eq(i, j, k))
-        # F_eta *= -3.0 * niu / self.tau
-        # F_eta[0] *= self.rho_grad[i, j][0]
-        # F_eta[1] *= self.rho_grad[i, j][1]
+        # u_grad = self.vel_grad[i, j]
+        # F_eta = niu * (u_grad + u_grad.transpose()) @ self.rho_grad[i, j]
+        F_eta = ti.Vector([0.0, 0.0])
+        for k in ti.static(range(9)):
+            F_eta[0] += self.e[k][0] * self.e[k][1] * (self.g_new[i, j][k] - self.g_eq(i, j, k))
+            F_eta[1] += self.e[k][0] * self.e[k][1] * (self.g_new[i, j][k] - self.g_eq(i, j, k))
+        F_eta *= -3.0 * niu / self.tau
+        F_eta[0] *= self.rho_grad[i, j][0]
+        F_eta[1] *= self.rho_grad[i, j][1]
 
         F_a = ti.Vector([0.0, 0.0])
         if j!=0 and j!=self.ny-1:
@@ -296,8 +297,8 @@ class lbm_solver:
 
 
         for i, j in self.phi:
-            # height = int(0.125 * self.nx + 0.05 * self.nx * tm.sin(tm.pi * i / self.nx))
-            height = int(0.125 * self.nx)
+            height = int(0.125 * self.nx + 0.05 * self.nx * tm.sin(tm.pi * i / self.nx))
+            # height = int(0.125 * self.nx)
             if j < height:
                 self.phi[i, j] = 0.0
                 self.rho[i, j] = self.rho_v
@@ -343,7 +344,6 @@ class lbm_solver:
             res = (2.0 * T_i + (u - 1.0) * T2) / (1 + u)
         else:
             res = self.GetTempPos(nx, ny)
-        # res = self.GetTempPos(nx, ny)
         
         return res
 
@@ -479,17 +479,6 @@ class lbm_solver:
             for k in ti.static(range(9)):
                 self.phi[i, j] += self.h_new[i, j][k]
             
-
-            # if self.phi[i, j] > 1.0:
-            #     for k in ti.static(range(9)):
-            #         self.h_new[i, j][k] /= self.phi[i, j]
-            #     self.phi[i, j] = 1.0
-            
-            # if self.phi[i, j] < 0.0:
-            #     for k in ti.static(range(9)):
-            #         self.h_new[i, j][k] = 0.0
-            #     self.phi[i, j] = 0.0
-            
             self.h_old[i, j] = self.h_new[i, j]
 
             self.rho[i, j] = self.phi[i, j] * self.rho_l + (1 - self.phi[i, j]) * self.rho_v
@@ -521,15 +510,11 @@ class lbm_solver:
             self.image[i, j] = self.phi[i, j] * col_l + (1 - self.phi[i, j]) * col_v 
         
             color_strength = self.vel[i, j].norm() * 10.0
-            # color_strength = 0.0
             self.image[i + self.nx, j] = ti.Vector([color_strength, color_strength, 0.0])
 
-            temp_color = (self.old_temperature[i, j] - 300) / 200.0
+            temp_color = (self.old_temperature[i, j] - 300) / 500.0
             self.image[i + 2 * self.nx, j] = ti.Vector([temp_color, 0.0, 0.0])
 
-            if i == 150 and j == 120:
-                self.image[i, j] = ti.Vector([1.0, 1.0, 1.0])
-                self.image[i + 2 * self.nx, j] = ti.Vector([1.0, 1.0, 1.0])
 
 
     @ti.kernel
