@@ -9,7 +9,7 @@ from matplotlib import cm
 # ti.init(arch=ti.cpu, cpu_max_num_threads = 1, debug = True)
 ti.init(arch=ti.cuda)
 
-benchmark = 1
+benchmark = 2
 
 @ti.data_oriented
 class lbm_solver:
@@ -183,7 +183,7 @@ class lbm_solver:
             T0 = (2.0 * T1 + (u - 1.0) * T2) / (1 + u)
             e_dot_T_inv = ((1.0 + 2.0 * u) * T0 - 4.0 * u * T1_v - (1.0 - 2.0 * u) * T2) * 0.5
             
-            h_fg = 0.4
+            h_fg = 1.6
             if self.phi[x, y] < 0.5:
                 res = (-self.k_vapor * e_dot_T + self.k_water * e_dot_T_inv) / (h_fg * self.e[k].norm())
             else:
@@ -191,7 +191,7 @@ class lbm_solver:
 
             # print(res)
             if benchmark == 1:
-                res = 0.05
+                res = 0.5
 
         else:
             res = 0.0
@@ -554,7 +554,7 @@ class lbm_solver:
     def UpdateImage(self):
         for i, j in self.old_temperature:
             col_l = ti.Vector([0.0, 0.0, 0.8])
-            col_v = ti.Vector([0.0, 0.8, 0.0])
+            col_v = ti.Vector([0.5, 0.5, 0.5])
             self.image[i, j] = self.phi[i, j] * col_l + (1 - self.phi[i, j]) * col_v 
             
             r_init = self.nx // 8
@@ -573,7 +573,7 @@ class lbm_solver:
 
     @ti.kernel
     def CalR(self) -> int:
-        res = 0
+        res = -1
         for i in range(self.ny):
             cnt = 0
             for j in range(self.nx):
@@ -583,6 +583,32 @@ class lbm_solver:
             ti.atomic_max(res, cnt)
         
         return res
+
+
+    def FindCenter(self):
+        center_x, center_y = 0, 0
+
+        res = 0
+        for i in range(self.ny):
+            cnt = 0
+            for j in range(self.nx):
+                if self.phi[i, j] < 0.5:
+                    cnt += 1
+            if cnt > res:
+                res = cnt
+                center_x = i
+            
+        res = 0
+        for i in range(self.ny):
+            cnt = 0
+            for j in range(self.nx):
+                if self.phi[j, i] < 0.5:
+                    cnt += 1
+            if cnt > res:
+                res = cnt
+                center_y = i
+        
+        return center_x, center_y 
     
 
     @ti.kernel
@@ -627,10 +653,13 @@ class lbm_solver:
         gui = ti.GUI(self.name, (4 * self.nx, self.ny))
         self.init()
         frame = 0
+        init_r = self.nx / 8
+
+        f1 = open("test2-r-3.txt", "w")
         while not gui.get_event(ti.GUI.ESCAPE, ti.GUI.EXIT):
-            frame += 1
             sys.stdout.flush()
-            for substep in range(10):
+            for substep in range(100):
+                frame += 1
                 if benchmark != 1:
                     self.UpdateTemp()
                 self.CalDerivative()
@@ -639,19 +668,31 @@ class lbm_solver:
                 self.MacroVari()
                 self.ApplyBc()
 
+                cur_r = self.CalR() / 2
+                print(frame, cur_r / init_r, file=f1)
+
             # self.Check()
             # print(self.SumPhi())
-            # print(self.CalR())
+
+            if cur_r < init_r / 2:
+                # cx, cy = self.FindCenter()
+                # for i in range(cy, 301):
+                #     print(i, self.vel[cx, i][0], file=f2)
+                #     print(i, self.phi[cx, i], file=f3)
+                
+                break
             
             self.UpdateImage()
             gui.set_image(self.image)
             gui.show()
+        
+        f1.close()
 
 
 if __name__ == '__main__':
     lbm = lbm_solver(
         name = "LBM",
-        bc_type = [1, 1, 1, 1],
+        bc_type = [0, 0, 0, 0],
         bc_value = [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0]]
     )
     lbm.solve()
