@@ -9,7 +9,7 @@ from matplotlib import cm
 # ti.init(arch=ti.cpu, cpu_max_num_threads = 1, debug = True)
 ti.init(arch=ti.cuda)
 
-benchmark = 2
+benchmark = 1
 
 @ti.data_oriented
 class lbm_solver:
@@ -214,7 +214,7 @@ class lbm_solver:
                     inter_x, inter_y = float(x) + u * self.e[k][0], float(y) + u * self.e[k][1]
                     p_rho_grad = self.CalRhoGradReal(inter_x, inter_y)
                     align = tm.dot(p_rho_grad.normalized(), self.e[k].normalized())
-                    if ti.abs(align) > max_inner:
+                    if align > max_inner:
                         max_inner = align
                         max_idx = k
                         distribute_u = u
@@ -655,7 +655,6 @@ class lbm_solver:
         frame = 0
         init_r = self.nx / 8
 
-        f1 = open("test2-r-3.txt", "w")
         while not gui.get_event(ti.GUI.ESCAPE, ti.GUI.EXIT):
             sys.stdout.flush()
             for substep in range(100):
@@ -666,27 +665,12 @@ class lbm_solver:
                 self.Collision()
                 self.Advection()
                 self.MacroVari()
-                self.ApplyBc()
 
-                cur_r = self.CalR() / 2
-                print(frame, cur_r / init_r, file=f1)
-
-            # self.Check()
-            # print(self.SumPhi())
-
-            if cur_r < init_r / 2:
-                # cx, cy = self.FindCenter()
-                # for i in range(cy, 301):
-                #     print(i, self.vel[cx, i][0], file=f2)
-                #     print(i, self.phi[cx, i], file=f3)
-                
-                break
             
             self.UpdateImage()
             gui.set_image(self.image)
             gui.show()
         
-        f1.close()
 
 
 if __name__ == '__main__':
