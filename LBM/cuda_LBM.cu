@@ -6,6 +6,8 @@
 #include <ctime>
 #include <cmath>
 
+#define BENCHMARK 2
+
 #define NX 301
 #define NY 301
 #define BLOCK_SIZE 16
@@ -18,6 +20,8 @@ __constant__ float rho_v = 99.9f;
 __constant__ float sigma = 1e-4;
 __constant__ float tau_phi = 0.8;
 __constant__ float tau = 0.8;
+__constant__ float k_water = 0.68;
+__constant__ float k_vapor = 0.0304;
 
 
 __constant__ float w[9] = {4.0 / 9.0, 1.0 / 9.0, 1.0 / 9.0, 1.0 / 9.0, 1.0 / 9.0,
@@ -151,7 +155,61 @@ __device__ float2 CalRhoGradReal(float x, float y, float2 *rho_grad) {
 }
 
 
-__device__ float CalMRate(int i, int j, float *rho, float2 *rho_grad, float *phi) {
+__device__ float CalMFlux(int x, int y, int k, float *phi, float *temp) {
+    float res = 0.0;
+    if(isINB(x, y, k, phi)) {
+
+#if BENCHMARK == 1
+
+        res = 0.5;
+
+#elif BENCHMARK == 2
+
+        int bx = (x - e[k].x + NX) % NX;
+        int by = (y - e[k].y + NY) % NY;
+        int nx = (x + e[k].x + NX) % NX;
+        int ny = (y + e[k].y + NY) % NY;
+
+        float T1 = 373.15;
+        float T2 = GetTempPos(bx, by, temp);
+        float T1_v = GetTempPos(x, y, temp);
+
+        float u = (0.5 - phi[POS(x, y)]) / (phi[POS(nx, ny)] - phi[POS(x, y)]);
+        float T0 = (2.0 * T1 + (u - 1.0) * T2) / (1.0 + u);
+        float e_dot_T = ((1.0 + 2.0 * u) * T0 - 4.0 * u * T1_v - (1.0 - 2.0 * u) * T2) * 0.5;
+
+        // reverse direction
+        bx = (x + 2 * e[k].x + NX) % NX;
+        by = (y + 2 * e[k].y + NY) % NY;
+        int cur_x = (x + e[k].x + NX) % NX;
+        int cur_y = (y + e[k].y + NY) % NY;
+        nx = x;
+        ny = y;
+        T1 = 373.15;
+        T2 = GetTempPos(bx, by, temp);
+        T1_v = GetTempPos(cur_x, cur_y, temp);
+
+        u = (0.5 - phi[POS(cur_x, cur_y)]) / (phi[POS(nx, ny)] - phi[POS(cur_x, cur_y)]);
+        T0 = (2.0 * T1 + (u - 1.0) * T2) / (1.0 + u);
+        float e_dot_T_inv = ((1.0 + 2.0 * u) * T0 - 4.0 * u * T1_v - (1.0 - 2.0 * u) * T2) * 0.5;
+
+        float h_fg = 1.6;
+        if(phi[POS(x, y)] < 0.5) {
+            res = (-k_vapor * e_dot_T + k_water * e_dot_T_inv) / (h_fg * sqrtf(dot(i2f(e[k]), i2f(e[k]))));
+        }
+        else {
+            res = (k_water * e_dot_T - k_vapor * e_dot_T_inv) / (h_fg * sqrtf(dot(i2f(e[k]), i2f(e[k]))));
+        }
+    }
+
+    return res;
+
+
+#endif
+}
+
+
+__device__ float CalMRate(int i, int j, float *rho, float2 *rho_grad, float *phi, float *temp) {
     int max_idx = 1000;
     float max_product = -10000.0f;
     float distribute_u = 0.0;
@@ -174,11 +232,15 @@ __device__ float CalMRate(int i, int j, float *rho, float2 *rho_grad, float *phi
 
     float res = 0.0f;
     if(max_idx != 1000) {
-        float flux = 0.5f;
+        float flux = CalMFlux(i, j, max_idx, phi, temp);
         res = flux * (1.0 - distribute_u);
     }
     else {
         res = 0.0;
+    }
+
+    if(i == 180 && j == 150) {
+        printf("%f\n", res);
     }
 
     return res;
@@ -213,8 +275,8 @@ __device__ float2 CalF(int i, int j, float *phi, float *phi_laplacian,
     float2 F_a = {0.0f, 0.0f};
     F_a = rho[POS(i, j)] * vel_div[POS(i, j)] * vel[POS(i, j)];
 
-    // return F_s + F_b + F_p + F_eta + F_a;
-    return float2({0.0, 0.0});
+    return F_s + F_b + F_p + F_eta + F_a;
+    // return float2({0.0, 0.0});
 }
 
 
@@ -227,6 +289,8 @@ __global__ void InitField(float *rho, float *phi, float *h, float *g, float *p, 
     int mid_x = NX / 2, mid_y = NY / 2;
     float r_init = float(NX) / 10.0f;
 
+#if BENCHMARK == 1
+
     if (((i-mid_x) * (i-mid_x) + (j-mid_y) * (j-mid_y)) < r_init * r_init) {
         phi[POS(i, j)] = 0.0f;
         rho[POS(i, j)] = rho_v;
@@ -235,6 +299,20 @@ __global__ void InitField(float *rho, float *phi, float *h, float *g, float *p, 
         phi[POS(i, j)] = 1.0f;
         rho[POS(i, j)] = rho_l;
     }
+
+#elif BENCHMARK == 2
+
+    if (((i-mid_x) * (i-mid_x) + (j-mid_y) * (j-mid_y)) < r_init * r_init) {
+        phi[POS(i, j)] = 1.0f;
+        rho[POS(i, j)] = rho_l;
+    }
+    else{
+        phi[POS(i, j)] = 0.0f;
+        rho[POS(i, j)] = rho_v;
+    }
+
+#endif
+
 
     // initialize h, g, p
     p[POS(i, j)] = 0.0f;
@@ -256,12 +334,12 @@ __global__ void InitField(float *rho, float *phi, float *h, float *g, float *p, 
 }
 
 
-__global__ void UpdateTemperature(float *old_temp, float *new_temp) {
+__global__ void UpdateTemperature(float *old_temp, float *new_temp, float2 *vel, float *phi) {
     int i = threadIdx.x + blockIdx.x * blockDim.x;
     int j = threadIdx.y + blockIdx.y * blockDim.y;
     if (i<0 || i >= NX || j<0 || j >= NY) return;
     if (i==0 || i==NX-1 || j==0 || j==NY-1) {
-        new_temp[POS(i, j)] = 1000.0f;
+        new_temp[POS(i, j)] = 2000.0f;
         return;
     }
 
@@ -276,8 +354,21 @@ __global__ void UpdateTemperature(float *old_temp, float *new_temp) {
         order[idx] = temp;
     }
 
+    float X_water = 0.10f;
+    float X_vapor = 0.02f;
+    float X;
+    if (phi[POS(i, j)] < 0.5) {
+        X = X_vapor;
+    }
+    else if (phi[POS(i, j)] == 0.5f) {
+        X = 0.5 * (X_vapor + X_water);
+    }
+    else {
+        X = X_water;
+    }
+
     float laplacian = 0.0f;
-    float X = 0.05f;
+    float2 Tgrad = {0.0f, 0.0f};
     int inv[9] = {0, 3, 4, 1, 2, 7, 8, 5, 6};
 
     for (int idx_k = 0; idx_k < 8; idx_k++) {
@@ -290,12 +381,12 @@ __global__ void UpdateTemperature(float *old_temp, float *new_temp) {
         float T1 = old_temp[POS(nx, ny)];
         float T2 = old_temp[POS(bx, by)];
 
-        float new_lap = 3.0f * w[k] * (T1 + T2 - 2.0f * old_temp[POS(i, j)]);
-        laplacian += new_lap;
+        laplacian += 3.0f * w[k] * (T1 + T2 - 2.0f * old_temp[POS(i, j)]);
+        Tgrad += 1.5f * w[k] * (T1 - T2) * i2f(e[k]);
     }
 
 
-    new_temp[POS(i, j)] = old_temp[POS(i, j)] + X * laplacian;
+    new_temp[POS(i, j)] = old_temp[POS(i, j)] + X * laplacian - dot(Tgrad, vel[POS(i, j)]);
 }
 
 
@@ -362,8 +453,6 @@ __global__ void Collision(
 
         float heq = hEq(i, j, k, vel, phi);
 
-        float h_temp = h_old[POSK(i, j, k)];
-
         // formula (22)
         h_old[POSK(i, j, k)] = h_old[POSK(i, j, k)] - (h_old[POSK(i, j, k)] - heq) / tau_phi;
 
@@ -372,11 +461,14 @@ __global__ void Collision(
         if(!(normal_grad.x==0.0 && normal_grad.y==0.0)) {
             // formula (24)
             R = dot(w[k] * i2f(e[k]), 4.0 * phi[POS(i, j)] * (1.0 - phi[POS(i, j)]) / W * normal_grad);
+            if(std::isnan(R)) {
+                R = 0.0;
+            }
         }
 
         // formula (25)
         float F = w[k] * (1.0f + 3.0f * (dot(i2f(e[k]), vel[POS(i, j)]) * (tau_phi - 0.5f) / tau_phi));
-        F *= -CalMRate(i, j, rho, rho_grad, phi) / rho_l;
+        F *= -CalMRate(i, j, rho, rho_grad, phi, old_temperature) / rho_l;
 
         h_old[POSK(i, j, k)] += (2.0f * tau_phi - 1.0) / (2.0 * tau_phi) * R + F;
 
@@ -386,7 +478,7 @@ __global__ void Collision(
         g_old[POSK(i, j, k)] -= (g_old[POSK(i, j, k)] - geq) / tau;
 
         // formula (32)
-        float P = w[k] * CalMRate(i, j, rho, rho_grad, phi) * (1.0 / rho_v - 1.0 / rho_l);
+        float P = w[k] * CalMRate(i, j, rho, rho_grad, phi, old_temperature) * (1.0 / rho_v - 1.0 / rho_l);
 
         // formula (33)
         float G = 3.0f * w[k] * dot(i2f(e[k]), CalF(i, j, phi, phi_laplacian, phi_grad, p_star, g_old, rho, vel_div, vel, rho_grad)) / rho[POS(i, j)];
@@ -460,7 +552,7 @@ __global__ void UpdateImg(float *phi, char *show, float2 *vel, float *old_temp) 
     show[POS(i, j) * 3 + 1] = char(255.f * (phi_value * col_l.y + (1.0f - phi_value) * col_v.y));
     show[POS(i, j) * 3 + 0] = char(255.f * (phi_value * col_l.z + (1.0f - phi_value) * col_v.z));
 
-    if (i == 5 && j == 100) {
+    if (i == 150 && j == 150) {
         show[POS(i, j) * 3 + 2] = 0xFF;
         show[POS(i, j) * 3 + 1] = 0xFF;
         show[POS(i, j) * 3 + 0] = 0xFF;
@@ -541,30 +633,31 @@ int main() {
     dim3 block(BLOCK_SIZE, BLOCK_SIZE);
     dim3 grid((NX + BLOCK_SIZE - 1) / BLOCK_SIZE, (NY + BLOCK_SIZE - 1) / BLOCK_SIZE);
 
-    for (int frame = 1; frame < 5000; frame++) {
-        UpdateTemperature<<<grid, block>>>(old_temperature, new_temperature);
-        cudaDeviceSynchronize();
+    for (int frame = 1; frame > 0; frame++) {
+        for (int step = 0; step < 10; step++){
 
-        CalDerivative<<<grid, block>>>(phi, rho, vel, phi_grad, rho_grad, phi_laplacian, vel_div);
-        cudaDeviceSynchronize();
+            UpdateTemperature<<<grid, block>>>(old_temperature, new_temperature, vel, phi);
+            cudaDeviceSynchronize();
+            swapBuffers(old_temperature, new_temperature);
 
-        Collision<<<grid, block>>>(h_old, h_new, g_old, g_new, phi, phi_grad, rho, rho_grad, p_star, phi_laplacian, vel_div, old_temperature, vel);
-        cudaDeviceSynchronize();
+            CalDerivative<<<grid, block>>>(phi, rho, vel, phi_grad, rho_grad, phi_laplacian, vel_div);
+            cudaDeviceSynchronize();
 
-        Advection<<<grid, block>>>(h_old, h_new, g_old, g_new);
-        cudaDeviceSynchronize();
+            Collision<<<grid, block>>>(h_old, h_new, g_old, g_new, phi, phi_grad, rho, rho_grad, p_star, phi_laplacian, vel_div, old_temperature, vel);
+            cudaDeviceSynchronize();
 
-        CalRho<<<grid, block>>>(phi, h_new, h_old, g_new, rho, p_star);
-        cudaDeviceSynchronize();
+            Advection<<<grid, block>>>(h_old, h_new, g_old, g_new);
+            cudaDeviceSynchronize();
 
-        CalDerivative<<<grid, block>>>(phi, rho, vel, phi_grad, rho_grad, phi_laplacian, vel_div);
-        cudaDeviceSynchronize();
+            CalRho<<<grid, block>>>(phi, h_new, h_old, g_new, rho, p_star);
+            cudaDeviceSynchronize();
 
-        CalVel<<<grid, block>>>(phi, phi_laplacian, phi_grad, p_star, g_new, rho, vel_div, vel, rho_grad, g_old);
-        cudaDeviceSynchronize();
+            CalDerivative<<<grid, block>>>(phi, rho, vel, phi_grad, rho_grad, phi_laplacian, vel_div);
+            cudaDeviceSynchronize();
 
-        // Swap Buffers
-        swapBuffers(old_temperature, new_temperature);
+            CalVel<<<grid, block>>>(phi, phi_laplacian, phi_grad, p_star, g_new, rho, vel_div, vel, rho_grad, g_old);
+            cudaDeviceSynchronize();
+        }
 
         // cudaMemcpy(temp_cpu, p_star, NX * NY * sizeof(float), cudaMemcpyDeviceToHost);
         // bool sym_flat = CheckSym(temp_cpu);

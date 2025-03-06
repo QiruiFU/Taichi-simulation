@@ -9,7 +9,7 @@ from matplotlib import cm
 # ti.init(arch=ti.cpu, cpu_max_num_threads = 1, debug = True)
 ti.init(arch=ti.cuda)
 
-benchmark = 1
+benchmark = 2
 
 @ti.data_oriented
 class lbm_solver:
@@ -228,8 +228,8 @@ class lbm_solver:
         else:
             res = 0.0
 
-        # if res != 0.0:
-            # print(res)
+        if x == 180 and y == 150:
+            print(res)
         
         return res
 
