@@ -172,6 +172,9 @@ class lbm_solver:
             T0 = (2.0 * T1 + (u - 1.0) * T2) / (1 + u)
             e_dot_T = ((1.0 + 2.0 * u) * T0 - 4.0 * u * T1_v - (1.0 - 2.0 * u) * T2) * 0.5
 
+            if x == 187 and y == 150:
+                print(res, T0, T1_v, T2, u)
+
             bx, by = x + 2 * self.e[k][0], y + 2 * self.e[k][1]
             curx, cury = x + self.e[k][0], y + self.e[k][1]
             nx, ny = x, y
@@ -183,13 +186,18 @@ class lbm_solver:
             T0 = (2.0 * T1 + (u - 1.0) * T2) / (1 + u)
             e_dot_T_inv = ((1.0 + 2.0 * u) * T0 - 4.0 * u * T1_v - (1.0 - 2.0 * u) * T2) * 0.5
             
+            if x == 187 and y == 150:
+                print(res, T0, T1_v, T2, u)
+                print()
+
             h_fg = 1.6
+
+
             if self.phi[x, y] < 0.5:
                 res = (-self.k_vapor * e_dot_T + self.k_water * e_dot_T_inv) / (h_fg * self.e[k].norm())
             else:
                 res = (self.k_water * e_dot_T - self.k_vapor * e_dot_T_inv) / (h_fg * self.e[k].norm())
 
-            # print(res)
             if benchmark == 1:
                 res = 0.5
 
@@ -223,13 +231,16 @@ class lbm_solver:
         
         res = 0.0
         if max_idx != 1000:
+            
+            # if x == 180 and y == 150:
+            #     nx, ny = x + self.e[max_idx][0], y + self.e[max_idx][1]
+            #     print(max_idx, self.phi[x, y], self.phi[nx, ny])
+
             flux = self.CalMFlux(x, y, max_idx)
             res = flux * (1.0 - distribute_u)
         else:
             res = 0.0
 
-        if x == 180 and y == 150:
-            print(res)
         
         return res
 

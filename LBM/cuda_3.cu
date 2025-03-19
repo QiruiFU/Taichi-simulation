@@ -6,10 +6,10 @@
 #include <ctime>
 #include <cmath>
 
-#define BENCHMARK 2
+#define BENCHMARK 3
 
-#define NX 301
-#define NY 301
+#define NX 401
+#define NY 401
 #define BLOCK_SIZE 16
 #define POS(x, y) (x * NY + y)
 #define POSK(x, y, k) (k * NX * NY + x * NY + y)
@@ -114,16 +114,18 @@ __device__ float gEq(int i, int j, int k, float2 *vel, float *p){
 
 __device__ bool isINB(int i, int j, int k, float *phi) {
     bool res = false;
-    int ni = (i + e[k].x + NX) % NX, nj = (j + e[k].y + NY) % NY;
-    if ((phi[POS(i, j)] - 0.5f) * (phi[POS(ni, nj)] - 0.5f) < 0.0f) {
-        res = true;
+    int ni = i + e[k].x, nj = (j + e[k].y + NY) % NY;
+    if (ni > 0 && ni < NX-1){
+        if ((phi[POS(i, j)] - 0.5f) * (phi[POS(ni, nj)] - 0.5f) < 0.0f) {
+            res = true;
+        }
     }
     return res;
 }
 
 
 __device__ float GetTempPos(int x, int y, float *temp) {
-    if ((x==0) || (x==NX-1) || (y==0) || (y==NY-1))
+    if (x==NX-1)
         return 1000.0f;
     else
         return temp[POS(x, y)];
@@ -132,9 +134,9 @@ __device__ float GetTempPos(int x, int y, float *temp) {
 
 __device__ float GetTemp(int x, int y, int k, float *temp, float *phi) {
     float res = 0.0f;
-    int nx = (x + e[k].x + NX) % NX, ny = (y + e[k].y + NY) % NY; 
+    int nx = x + e[k].x, ny = (y + e[k].y + NY) % NY; 
     if(isINB(x, y, k, phi)) {
-        int bx = (x - e[k].x + NX) % NX, by = (y - e[k].y + NY) % NY; 
+        int bx = x - e[k].x, by = (y - e[k].y + NY) % NY; 
         float T1 = 373.15;
         float T2 = GetTempPos(bx, by, temp);
         float u = (0.5 - phi[POS(x, y)]) / (phi[POS(nx, ny)] - phi[POS(x, y)]);
@@ -230,6 +232,44 @@ __device__ float CalMFlux(int x, int y, int k, float *phi, float *temp) {
             res = (k_water * e_dot_T - k_vapor * e_dot_T_inv) / (h_fg * sqrtf(dot(i2f(e[k]), i2f(e[k]))));
         }
 
+#elif BENCHMARK == 3
+
+        int bx = x - e[k].x;
+        int by = (y - e[k].y + NY) % NY;
+        int nx = x + e[k].x;
+        int ny = (y + e[k].y + NY) % NY;
+
+        float T1 = 373.15;
+        float T2 = GetTempPos(bx, by, temp);
+        float T1_v = GetTempPos(x, y, temp);
+
+        float u = (0.5 - phi[POS(x, y)]) / (phi[POS(nx, ny)] - phi[POS(x, y)]);
+        float T0 = (2.0 * T1 + (u - 1.0) * T2) / (1.0 + u);
+        float e_dot_T = ((1.0 + 2.0 * u) * T0 - 4.0 * u * T1_v - (1.0 - 2.0 * u) * T2) * 0.5;
+
+        // reverse direction
+        bx = x + 2 * e[k].x;
+        by = (y + 2 * e[k].y + NY) % NY;
+        int cur_x = x + e[k].x;
+        int cur_y = (y + e[k].y + NY) % NY;
+        nx = x;
+        ny = y;
+        T1 = 373.15;
+        T2 = GetTempPos(bx, by, temp);
+        T1_v = GetTempPos(cur_x, cur_y, temp);
+
+        u = (0.5 - phi[POS(cur_x, cur_y)]) / (phi[POS(nx, ny)] - phi[POS(cur_x, cur_y)]);
+        T0 = (2.0 * T1 + (u - 1.0) * T2) / (1.0 + u);
+        float e_dot_T_inv = ((1.0 + 2.0 * u) * T0 - 4.0 * u * T1_v - (1.0 - 2.0 * u) * T2) * 0.5;
+
+        float h_fg = 1.6;
+
+        if(phi[POS(x, y)] < 0.5) {
+            res = (-k_vapor * e_dot_T + k_water * e_dot_T_inv) / (h_fg * sqrtf(dot(i2f(e[k]), i2f(e[k]))));
+        }
+        else {
+            res = (k_water * e_dot_T - k_vapor * e_dot_T_inv) / (h_fg * sqrtf(dot(i2f(e[k]), i2f(e[k]))));
+        }
 #endif
 
     }
@@ -245,7 +285,7 @@ __device__ float CalMRate(int i, int j, float *rho, float2 *rho_grad, float *phi
 
     for (int k = 1; k < 9; k++) {
         if(isINB(i, j, k, phi)) {
-            int ni = (i + e[k].x + NX) % NX, nj = (j + e[k].y + NY) % NY;
+            int ni = i + e[k].x, nj = (j + e[k].y + NY) % NY;
             float u = (0.5f - phi[POS(i, j)]) / (phi[POS(ni, nj)] - phi[POS(i, j)]);
             // TAG: it can cross the bondary
             float inter_x = float(i) + u * e[k].x, inter_y = float(j) + u * e[k].y;
@@ -261,10 +301,6 @@ __device__ float CalMRate(int i, int j, float *rho, float2 *rho_grad, float *phi
 
     float res = 0.0f;
     if(max_idx != 1000) {
-        // if (i==180 && j==150) {
-        //     int ni = (i + e[max_idx].x + NX) % NX, nj = (j + e[max_idx].y + NY) % NY;
-        //     printf("%d, phi0=%f, phi1=%f\n", max_idx, phi[POS(i, j)], phi[POS(ni, nj)]);
-        // }
         float flux = CalMFlux(i, j, max_idx, phi, temp);
         res = flux * (1.0 - distribute_u);
     }
@@ -272,30 +308,47 @@ __device__ float CalMRate(int i, int j, float *rho, float2 *rho_grad, float *phi
         res = 0.0;
     }
 
-
     return res;
 }
 
 
 __device__ float2 CalF(int i, int j, float *phi, float *phi_laplacian,
                         float2 *phi_grad, float *p_star, float *g, float *rho, float *vel_div, float2 *vel, float2 *rho_grad) {
+
+    bool left = (j <= NY/2);
+
+    // if(left)
+    //     j = NY - j - 1;
+
+    // shuffle order
+    curandState state;
+    curand_init(1234, threadIdx.x, 0, &state);
+    int order[8] = {1, 2, 3, 4, 5, 6, 7, 8};
+    for (int idx = 7; idx > 0; --idx) {
+        int nidx = curand(&state) % (idx + 1);
+        int temp = order[nidx];
+        order[nidx] = order[idx];
+        order[idx] = temp;
+    }
+
     float beta = 12.0 * sigma / W;
     float kappa = 1.5 * W;
     float phi_p = phi[POS(i, j)];
     float miu = 2.0 * beta * phi_p * (1.0 - phi_p) * (1.0 - 2.0 * phi_p) - kappa * phi_laplacian[POS(i, j)];
     float2 F_s = miu * phi_grad[POS(i, j)];
 
-    float2 F_b = {0.0, 0.0};
+    float2 F_b = (rho_l - rho[POS(i, j)]) * float2({-0.00001, 0.0});
 
     float2 F_p = - (1.0 / 3.0) * p_star[POS(i, j)] * rho_grad[POS(i, j)];
 
     float niu = (tau - 0.5) / 3.0;
     float2 F_eta = {0.0, 0.0};
 
-    for(int k = 0; k < 9; k++) {
+    for(int idx_k = 0; idx_k < 9; idx_k++) {
+        int k = order[idx_k];
         // TAG: why g_new here?
-        F_eta.x += e[k].x * e[k].y * (g[POSK(i, j, k)] - gEq(i, j, k, vel, p_star));
-        F_eta.y += e[k].x * e[k].y * (g[POSK(i, j, k)] - gEq(i, j, k, vel, p_star));
+        F_eta.x += float(e[k].x) * float(e[k].y) * (g[POSK(i, j, k)] - gEq(i, j, k, vel, p_star));
+        F_eta.y += float(e[k].x) * float(e[k].y) * (g[POSK(i, j, k)] - gEq(i, j, k, vel, p_star));
     }
 
     F_eta *= -3.0 * niu / tau;
@@ -305,8 +358,12 @@ __device__ float2 CalF(int i, int j, float *phi, float *phi_laplacian,
     float2 F_a = {0.0f, 0.0f};
     F_a = rho[POS(i, j)] * vel_div[POS(i, j)] * vel[POS(i, j)];
 
-    return F_s + F_b + F_p + F_eta + F_a;
-    // return float2({0.0, 0.0});
+    float2 res = F_s + F_b + F_p + F_eta + F_a;
+
+    // if (left)
+    //     res.y *= -1.0;
+    
+    return res;
 }
 
 
@@ -341,6 +398,17 @@ __global__ void InitField(float *rho, float *phi, float *h, float *g, float *p, 
         rho[POS(i, j)] = rho_v;
     }
 
+#elif BENCHMARK == 3
+    int height = int(0.05 * NX + 0.1 * NX * sin(acos(-1.0) * float(j) / NY));
+    if((NX - i) < height) {
+        phi[POS(i, j)] = 0.0f;
+        rho[POS(i, j)] = rho_v;
+    }
+    else {
+        phi[POS(i, j)] = 1.0f;
+        rho[POS(i, j)] = rho_l;
+    }
+
 #endif
 
 
@@ -354,7 +422,7 @@ __global__ void InitField(float *rho, float *phi, float *h, float *g, float *p, 
     }
 
     // initialize temperature
-    if (i==0 || i==NX-1 || j==0 || j==NY-1) {
+    if (i==NX-1) {
         old_temp[POS(i, j)] = new_temp[POS(i, j)] = 1000.0f;
     }
     else {
@@ -367,9 +435,9 @@ __global__ void InitField(float *rho, float *phi, float *h, float *g, float *p, 
 __global__ void UpdateTemperature(float *old_temp, float *new_temp, float2 *vel, float *phi) {
     int i = threadIdx.x + blockIdx.x * blockDim.x;
     int j = threadIdx.y + blockIdx.y * blockDim.y;
-    if (i<0 || i >= NX || j<0 || j >= NY) return;
-    if (i==0 || i==NX-1 || j==0 || j==NY-1) {
-        new_temp[POS(i, j)] = 2000.0f;
+    if (i<=0 || i >= NX || j<0 || j >= NY) return;
+    if (i==NX-1) {
+        new_temp[POS(i, j)] = 1000.0f;
         return;
     }
 
@@ -384,8 +452,8 @@ __global__ void UpdateTemperature(float *old_temp, float *new_temp, float2 *vel,
         order[idx] = temp;
     }
 
-    float X_water = 0.30f;
-    float X_vapor = 0.06f;
+    float X_water = 0.10f;
+    float X_vapor = 0.02f;
     float X;
     if (phi[POS(i, j)] < 0.5) {
         X = X_vapor;
@@ -423,7 +491,7 @@ __global__ void UpdateTemperature(float *old_temp, float *new_temp, float2 *vel,
 __global__ void CalDerivative(float *phi, float *rho, float2 *vel, float2 *phi_grad, float2 *rho_grad, float *phi_laplacian, float *vel_div) {
     int i = threadIdx.x + blockIdx.x * blockDim.x;
     int j = threadIdx.y + blockIdx.y * blockDim.y;
-    if (i<0 || i >= NX || j<0 || j >= NY) return;
+    if (i<=0 || i >= NX-1 || j<0 || j >= NY) return;
 
     // shuffle order
     curandState state;
@@ -443,16 +511,16 @@ __global__ void CalDerivative(float *phi, float *rho, float2 *vel, float2 *phi_g
 
     for(int idx_k = 0; idx_k < 9; idx_k++) {
         int k = order[idx_k];
-        int ni = (i + e[k].x + NX) % NX;
+        int ni = i + e[k].x;
         int nj = (j + e[k].y + NY) % NY;
 
         phi_grad[POS(i, j)] += 3.0f * w[k] * phi[POS(ni, nj)] * i2f(e[k]);
         rho_grad[POS(i, j)] += 3.0f * w[k] * rho[POS(ni, nj)] * i2f(e[k]);
         phi_laplacian[POS(i, j)] += 6.0f * w[k] * (phi[POS(ni, nj)] - phi[POS(i, j)]);
-        vel_div[POS(i, j)] += 3.0f * w[k] * dot(normalize(i2f(e[k])), vel[POS(ni, nj)]);
+        // vel_div[POS(i, j)] += 3.0f * w[k] * dot(normalize(i2f(e[k])), vel[POS(ni, nj)]);
     }
     
-    vel_div[POS(i, j)] = 0.5f * (vel[POS((i+1)%NX, j)].x + vel[POS(i, (j+1)%NY)].y - vel[POS((i-1+NX)%NX, j)].x - vel[POS(i, (j-1+NY)%NY)].y);
+    vel_div[POS(i, j)] = 0.5f * (vel[POS(i+1, j)].x + vel[POS(i, (j+1)%NY)].y - vel[POS(i-1, j)].x - vel[POS(i, (j-1+NY)%NY)].y);
 }
 
 
@@ -505,7 +573,7 @@ __global__ void Collision(
 
         // -------- update g --------
         float geq = gEq(i, j, k, vel, p_star);
-        g_old[POSK(i, j, k)] -= (g_old[POSK(i, j, k)] - geq) / tau;
+        g_old[POSK(i, j, k)] = g_old[POSK(i, j, k)] - (g_old[POSK(i, j, k)] - geq) / tau;
 
         // formula (32)
         float P = w[k] * CalMRate(i, j, rho, rho_grad, phi, old_temperature) * (1.0 / rho_v - 1.0 / rho_l);
@@ -526,11 +594,46 @@ __global__ void Advection(float *h_old, float *h_new, float *g_old, float *g_new
     int j = threadIdx.y + blockIdx.y * blockDim.y;
     if (i<0 || i >= NX || j<0 || j >= NY) return;
 
-    for(int k = 0; k < 9; k++) {
-        int i_source = (i - e[k].x + NX) % NX, j_source = (j - e[k].y + NY) % NY;
-        h_new[POSK(i, j, k)] = h_old[POSK(i_source, j_source, k)];
-        g_new[POSK(i, j, k)] = g_old[POSK(i_source, j_source, k)];
+    if(i == NX-1) {
+        for(int k = 0; k < 9; k++) {
+            if(k==3){
+                h_new[POSK(i, j, k)] = h_old[POSK(i, j, 1)];
+                g_new[POSK(i, j, k)] = g_old[POSK(i, j, 1)];
+            }
+            else if(k==6){
+                h_new[POSK(i, j, k)] = h_old[POSK(i, j, 5)];
+                g_new[POSK(i, j, k)] = g_old[POSK(i, j, 5)];
+            }
+            else if(k==7){
+                h_new[POSK(i, j, k)] = h_old[POSK(i, j, 8)];
+                g_new[POSK(i, j, k)] = g_old[POSK(i, j, 8)];
+            }
+            else{
+                int i_source = i - e[k].x, j_source = (j - e[k].y + NY) % NY;
+                h_new[POSK(i, j, k)] = h_old[POSK(i_source, j_source, k)];
+                g_new[POSK(i, j, k)] = g_old[POSK(i_source, j_source, k)];
+            }
+
+            // h_new[POSK(i, j, k)] = h_old[POSK(i, j, k)];
+            // g_new[POSK(i, j, k)] = g_old[POSK(i, j, k)];
+        }
     }
+
+    else if (i == 0) {
+        for(int k = 0; k < 9; k++) {
+            h_new[POSK(i, j, k)] = h_old[POSK(i, j, k)];
+            g_new[POSK(i, j, k)] = g_old[POSK(i, j, k)];
+        }
+    }
+
+    else{
+        for(int k = 0; k < 9; k++) {
+            int i_source = i - e[k].x, j_source = (j - e[k].y + NY) % NY;
+            h_new[POSK(i, j, k)] = h_old[POSK(i_source, j_source, k)];
+            g_new[POSK(i, j, k)] = g_old[POSK(i_source, j_source, k)];
+        }
+    }
+
 }
 
 
@@ -561,6 +664,10 @@ __global__ void CalRho(float *phi, float *h_new, float *h_old, float *g_new, flo
 
     rho[POS(i, j)] = phi[POS(i, j)] * rho_l + (1.0f - phi[POS(i, j)]) * rho_v;
 
+    if (i == 0) {
+        p_star[POS(i, j)] = 0.0f;
+    }
+
 }
 
 __global__ void CalVel(float *phi, float *phi_laplacian, float2 *phi_grad, float *p_star, float *g_new, float *rho, float *vel_div,
@@ -580,15 +687,32 @@ __global__ void CalVel(float *phi, float *phi_laplacian, float2 *phi_grad, float
         order[idx] = temp;
     }
 
+    // float2 FF = {0.0, 0.0};
+    // if(j>NY/2){
+    //     FF = CalF(i, NY-j-1, phi, phi_laplacian, phi_grad, p_star, g_new, rho, vel_div, vel, rho_grad);
+    //     FF.y *= -1;
+    // }
+    // else {
+    // }
     float2 FF = CalF(i, j, phi, phi_laplacian, phi_grad, p_star, g_new, rho, vel_div, vel, rho_grad);
+
     vel[POS(i, j)] = (1.0 / (2.0 * rho[POS(i, j)])) * FF;
     for(int idx_k = 0; idx_k < 9; idx_k++) {
         int k = order[idx_k];
         vel[POS(i, j)] += g_new[POSK(i, j, k)] * i2f(e[k]);
         g_old[POSK(i, j, k)] = g_new[POSK(i, j, k)];
     }
+
+    if ((i==400&&j==100) || (i==400&&j==200)) {
+        printf("%d %d %f [%f %f] [%f %f]\n", i, j, rho[POS(i, j)], FF.x, FF.y, vel[POS(i, j)].x, vel[POS(i, j)].y);
+    }
+
+    if (i == 0) {
+        vel[POS(i, j)] = {0.0f, 0.0f};
+    }
 }
         
+
 __global__ void UpdateImg(float *phi, char *show, float2 *vel, float *old_temp) {
     int i = threadIdx.x + blockIdx.x * blockDim.x;
     int j = threadIdx.y + blockIdx.y * blockDim.y;
@@ -609,12 +733,7 @@ __global__ void UpdateImg(float *phi, char *show, float2 *vel, float *old_temp) 
     show[pos1 * 3 + 1] = char(255.f * (phi_value * col_l.y + (1.0f - phi_value) * col_v.y));
     show[pos1 * 3 + 0] = char(255.f * (phi_value * col_l.z + (1.0f - phi_value) * col_v.z));
 
-    int pos_mid = (NX/2) * 3 * NY + (NY/2);
-    show[pos_mid * 3 + 2] = 0xFF;
-    show[pos_mid * 3 + 1] = 0xFF;
-    show[pos_mid * 3 + 0] = 0xFF;
-
-    float vel_mag = sqrtf(dot(vel[POS(i, j)], vel[POS(i, j)])) * 1000.0f;
+    float vel_mag = sqrtf(dot(vel[POS(i, j)], vel[POS(i, j)])) * 100.0f;
     vel_mag = min(max(vel_mag, 0.0), 1.0);
     show[pos2 * 3 + 2] = char(255.f * vel_mag);
     show[pos2 * 3 + 1] = char(255.f * vel_mag);
@@ -626,7 +745,6 @@ __global__ void UpdateImg(float *phi, char *show, float2 *vel, float *old_temp) 
     show[pos3 * 3 + 1] = 0.0;
     show[pos3 * 3 + 0] = 0.0;
 }
-
 
 // Swap buffers
 void swapBuffers(float *&a, float *&b) {
