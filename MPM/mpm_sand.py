@@ -6,7 +6,7 @@ ti.init(arch=ti.gpu)
 
 visualization = 0
 n_particle = 72000
-nx = ny = 180
+nx = ny = 40
 nz = 180 
 
 dx = 1 / 64
@@ -98,7 +98,7 @@ def Initiate():
             idy = (i % (a_len * a_len)) % a_len
             idz = i // (a_len * a_len)
 
-            base = ti.Vector([30, 30, 5]) * dx
+            base = ti.Vector([20, 10, 20]) * dx
             rand_dpos = ti.Vector([ti.random(float)-0.5, ti.random(float)-0.5, ti.random(float)-0.5]) * 0.05
             pos_particle[i] = (base + 0.5 * dx * ti.Vector([idx, idy, idz]) + rand_dpos)
             vel_particle[i] = ti.Vector([0.0, 0.0, 0.0])
@@ -222,7 +222,7 @@ def main():
     scene = gui.get_scene()
     camera = ti.ui.Camera()
 
-    camera.position(2, 2, 0.5)
+    camera.position(2, 2, 1.5)
     camera.lookat(0.0, 0.0, 0.0)
     camera.up(0, 0, 1)
     
