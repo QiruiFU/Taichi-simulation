@@ -6,8 +6,8 @@ ti.init(arch=ti.gpu)
 
 visualization = 0
 n_particle = 72000
-nx = ny = 40
-nz = 180 
+nx = ny = 80
+nz = 120 
 
 dx = 1 / 64
 lenx, leny, lenz = nx * dx, ny * dx, nz * dx
@@ -28,8 +28,13 @@ niu = 0.2
 # zeta = 10
 miu_0, lambda_0 = E_0 / (2 * (1 + niu)), E_0 * niu / ((1 + niu) * (1 - 2 * niu))  # Lame parameters
 
-fangle = tm.pi / 6
-alpha = ti.sqrt(2 / 3) * (2 * ti.sin(fangle) / (3 - ti.sin(fangle)))
+
+# fangle = tm.pi / 6
+# alpha = ti.sqrt(2 / 3) * (2 * ti.sin(fangle) / (3 - ti.sin(fangle)))
+
+q = ti.field(float, shape = n_particle)
+alpha = ti.field(float, shape = n_particle)
+h0, h1, h2, h3 = 35, 9, 0.2, 10
 
 
 vel_particle = ti.Vector.field(3, float, shape = n_particle)
@@ -98,13 +103,14 @@ def Initiate():
             idy = (i % (a_len * a_len)) % a_len
             idz = i // (a_len * a_len)
 
-            base = ti.Vector([20, 10, 20]) * dx
+            base = ti.Vector([40, 40, 5]) * dx
             rand_dpos = ti.Vector([ti.random(float)-0.5, ti.random(float)-0.5, ti.random(float)-0.5]) * 0.05
             pos_particle[i] = (base + 0.5 * dx * ti.Vector([idx, idy, idz]) + rand_dpos)
             vel_particle[i] = ti.Vector([0.0, 0.0, 0.0])
             F_E_particle[i] = ti.Matrix.identity(float, 3)
             F_P_particle[i] = ti.Matrix.identity(float, 3)
             C_particle[i] = ti.Matrix.zero(float, 3, 3)
+            q[i] = 0.0
 
 
 @ti.kernel
@@ -120,21 +126,28 @@ def Particle2Grid():
         singular = ti.Vector([sigma[0, 0], sigma[1, 1], sigma[2, 2]])
         eps_p = tm.log(singular)
         eps_hat = eps_p - (eps_p.sum() * ti.Vector([1.0, 1.0, 1.0])) / 3
-        gamma_p = eps_hat.norm() + ((3 * lambda_0 + 2 * miu_0) / (2 * miu_0)) * eps_p.sum() * alpha
+        gamma_p = eps_hat.norm() + ((3 * lambda_0 + 2 * miu_0) / (2 * miu_0)) * eps_p.sum() * alpha[p]
+        # gamma_p = eps_hat.norm() + ((3 * lambda_0 + 2 * miu_0) / (2 * miu_0)) * eps_p.sum() * alpha
 
+        delta_q = 0.0
         if gamma_p < 0:
             pass
         elif eps_p.sum() > 0 or eps_hat.norm() < 1e-8:
             sigma = ti.Matrix.identity(float, 3)
+            delta_q = eps_p.norm()
         else:
             Hp = eps_p - gamma_p * eps_hat / eps_hat.norm()
             new_singular = ti.exp(Hp)
             sigma[0, 0] = new_singular[0]
             sigma[1, 1] = new_singular[1]
             sigma[2, 2] = new_singular[2]
+            delta_q = gamma_p
 
         # print(sigma)
 
+        q[p] += delta_q
+        phi = h0 + (h1 * q[p] - h3) * ti.exp(-h2 * q[p])
+        alpha[p] = ti.sqrt(2 / 3) * (2 * ti.sin(phi) / (3 - ti.sin(phi)))
         
         F_P_particle[p] = V @ sigma.inverse() @ U.transpose() @ F_E_particle[p] @ F_P_particle[p]
         F_E_particle[p] = U @ sigma @ V.transpose()
@@ -216,7 +229,7 @@ def Grid2Particle():
 
 def main():
     Initiate()
-    gui = ti.ui.Window('SNOW', res = (700, 700))
+    gui = ti.ui.Window('SAND', res = (700, 700))
     canvas = gui.get_canvas()
     canvas.set_background_color((0, 0, 0))
     scene = gui.get_scene()
