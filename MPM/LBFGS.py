@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 
 @ti.data_oriented
 class LBFGS:
-    def __init__(self, energy_fn, dim=3, alpha=1.0, beta=0.5, eta=1e-2, m=15):
+    def __init__(self, energy_fn, dim=3, alpha=0.1, beta=0.9, eta=1e-2, m=15):
         self.dim = dim
         self.m = m  # 历史窗口大小
         self.energy = energy_fn
@@ -235,9 +235,9 @@ class LBFGS:
 
 # 测试示例（与BFGS相同）
 if __name__ == "__main__":
-    dim = 9
+    dim = 3
 
-    ti.init(arch=ti.vulkan)
+    ti.init(arch=ti.gpu)
 
     @ti.kernel  
     def rosenbrock_energy(x: ti.template(),  grad: ti.template()) -> ti.f32:
@@ -264,5 +264,5 @@ if __name__ == "__main__":
     lbfgs.x.from_numpy(x_init)
     
     # 运行优化
-    lbfgs.minimize(max_iter=200)
+    lbfgs.minimize(max_iter=20000)
     print("Optimized x:", lbfgs.x.to_numpy())
