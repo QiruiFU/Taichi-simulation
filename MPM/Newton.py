@@ -77,7 +77,9 @@ class Newton:
         start_time = time.time()
         for it in range(max_iter):
             # 计算当前能量和梯度
-            self.f0 = self.grad_fn(self.x, self.grad)
+            self.grad_fn(self.x, self.grad)
+            self.f0 = self.energy_fn(self.x)
+            # self.f0 = self.grad_fn(self.x, self.grad)
             print(f"Iteration {it}, Energy: {self.f0:.4e}")
 
             # 检查收敛
@@ -95,7 +97,7 @@ class Newton:
                 break
 
             # 构建Hessian矩阵
-            H_builder = ti.linalg.SparseMatrixBuilder(self.dim, self.dim, max_num_triplets=(int)(self.dim**2 / 10))
+            H_builder = ti.linalg.SparseMatrixBuilder(self.dim, self.dim, max_num_triplets=(int)(self.dim**2 / 100))
             self.hess_fn(self.x, H_builder)
             H = H_builder.build()
 
@@ -141,7 +143,7 @@ class Newton:
 # 示例使用
 if __name__ == "__main__":
     ti.init(arch=ti.gpu)
-    dim = 3
+    dim = 3000
 
     @ti.kernel
     def quadratic_energy(x: ti.template()) -> float:
@@ -220,11 +222,11 @@ if __name__ == "__main__":
                       hess_fn=rosenbrock_hess,
                       dim=dim)
     
-    x_np= np.ones(dim)
+    x_np = np.random.rand(dim)
     # 设置初始值
     optimizer.x.from_numpy(x_np)
     
-    # # 梯度检查
+    # 梯度检查
     # optimizer.check_gradient()
     
     # 执行优化
@@ -233,8 +235,8 @@ if __name__ == "__main__":
     print(f"Final parameters: {optimizer.x.to_numpy()}")
     
     # 绘制能量变化
-    plt.plot(optimizer.f_his)
-    plt.title("Energy History")
-    plt.xlabel("Iteration")
-    plt.ylabel("Energy")
-    plt.show()
+    # plt.plot(optimizer.f_his)
+    # plt.title("Energy History")
+    # plt.xlabel("Iteration")
+    # plt.ylabel("Energy")
+    # plt.show()

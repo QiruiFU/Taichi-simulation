@@ -7,10 +7,11 @@ import matplotlib.pyplot as plt
 
 @ti.data_oriented
 class LBFGS:
-    def __init__(self, energy_fn, dim=3, alpha=0.1, beta=0.9, eta=1e-2, m=15):
+    def __init__(self, energy_fn, grad_fn, dim=3, alpha=0.1, beta=0.9, eta=1e-2, m=15):
         self.dim = dim
         self.m = m  # 历史窗口大小
-        self.energy = energy_fn
+        self.energy_fn = energy_fn
+        self.grad_fn = grad_fn
         self.alpha = alpha  # 线搜索参数
         self.beta = beta    # 线搜索衰减率
         self.eta = eta      # 收敛阈值
@@ -120,7 +121,8 @@ class LBFGS:
 
     def line_search(self) -> ti.f32:
         alpha = 1.0
-        f0 = self.energy(self.x, self.grad)
+        f0 = self.energy_fn(self.x)
+        self.grad_fn(self.x, self.grad)
         
         @ti.kernel
         def calc_g0() -> ti.f32:
@@ -137,7 +139,9 @@ class LBFGS:
 
         while alpha > 1e-6:
             update_temp_x(alpha)
-            f_new = self.energy(self.temp_x, self.temp_grad)
+            f_new = self.energy_fn(self.temp_x)
+            self.grad_fn(self.temp_x, self.temp_grad)
+
             if f_new <= f0 + self.alpha * alpha * g0:
                 break
             alpha *= self.beta
@@ -145,14 +149,18 @@ class LBFGS:
 
     def minimize(self, max_iter=50):
         start_time = time.time()
-        current_idx = 0
 
         # 初始梯度计算
-        f = self.energy(self.x, self.grad)
+        f = self.energy_fn(self.x)
+        self.grad_fn(self.x, self.grad)
+
         self.grad_old.copy_from(self.grad)
 
+        total_iteration = 0
         for k in range(max_iter):
-            f = self.energy(self.x, self.grad)
+            total_iteration += 1
+            f = self.energy_fn(self.x)
+            self.grad_fn(self.x, self.grad)
             self.f_his.append(f)
             print(f"Iteration {k}: Energy = {f}")
 
@@ -195,7 +203,7 @@ class LBFGS:
 
             # 线搜索
             alpha = self.line_search()
-            print(f"Alpha: {alpha}")
+            # print(f"Alpha: {alpha}")
 
             # 保存旧状态
             self.x_old.copy_from(self.x)
@@ -209,7 +217,7 @@ class LBFGS:
             update_x(alpha)
 
             # 计算新梯度
-            self.energy(self.x, self.grad)
+            self.grad_fn(self.x, self.grad)
 
             # 计算s和y
             @ti.kernel
@@ -231,6 +239,8 @@ class LBFGS:
             self.current_idx[None] = (self.current_idx[None] + 1) % self.m
 
             self.time_his.append(time.time() - start_time)
+        
+        # print(total_iteration)
 
 
 # 测试示例（与BFGS相同）
@@ -239,30 +249,33 @@ if __name__ == "__main__":
 
     ti.init(arch=ti.gpu)
 
-    @ti.kernel  
-    def rosenbrock_energy(x: ti.template(),  grad: ti.template()) -> ti.f32:
-        """支持梯度引用传递的能量函数实现"""
+    @ti.kernel
+    def rosenbrock_energy(x: ti.template()) -> ti.f32:
         f_term_total = 0.0
         for i in range(x.shape[0]):
             if i % 3 == 0:
                 x1, x2, x3 = x[i], x[i+1], x[i+2]
-
-                # 能量计算 
                 f_term = (3 - x1)**2 + 7*(x2 - x1**2)**2 + 9*(x3 - x1 - x2**2)**2 
+                f_term_total += f_term
+        return f_term_total 
+
+
+    @ti.kernel  
+    def rosenbrock_grad(x: ti.template(),  grad: ti.template()):
+        for i in range(x.shape[0]):
+            if i % 3 == 0:
+                x1, x2, x3 = x[i], x[i+1], x[i+2]
 
                 # 梯度计算 
                 grad[i] = 2*(x1 - 3) + 28*(x1**2 - x2)*x1 + 18*(-x3 + x1 + x2**2)
                 grad[i+1] = 14*(x2 - x1**2) + 18*(x3 - x1 - x2**2)*(-2*x2)
                 grad[i+2] = 18*(x3 - x1 - x2**2)
 
-                f_term_total += f_term
-        return f_term_total 
-
     # 初始化参数
     x_init = np.zeros(dim, dtype=np.float32)
-    lbfgs = LBFGS(rosenbrock_energy, dim=dim)
+    lbfgs = LBFGS(rosenbrock_energy, rosenbrock_grad, dim=dim)
     lbfgs.x.from_numpy(x_init)
     
     # 运行优化
-    lbfgs.minimize(max_iter=20000)
+    lbfgs.minimize(max_iter=200)
     print("Optimized x:", lbfgs.x.to_numpy())
