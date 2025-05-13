@@ -3,18 +3,19 @@ import taichi as ti
 import taichi.math as tm
 from Newton import Newton
 from LBFGS import LBFGS
+from Gradient import GradientDesent
 
 ti.init(arch=ti.gpu)
 
 visualization = 0
-implicit = True
+implicit = False
 benchmark = 1
 
 n_particle = 20 ** 3
-nx = ny = 50
-nz = 30 
+nx = ny = 30
+nz = 20 
 
-dx = 1 / 64
+dx = 1 / 16
 lenx, leny, lenz = nx * dx, ny * dx, nz * dx
 
 p_vol_0 = dx**3 / (4)**3
@@ -136,7 +137,7 @@ def Initiate():
             idy = (i % (cube_len * cube_len)) % cube_len
             idz = i // (cube_len * cube_len)
 
-            base = ti.Vector([0.2, 0.2, 0.2])
+            base = ti.Vector([0.6, 0.6, 0.3])
             # rand_dpos = ti.Vector([ti.random(float)-0.5, ti.random(float)-0.5, ti.random(float)-0.5]) * 0.05
             rand_dpos = ti.Vector([0, 0, 0])
             pos_particle[i] = (base + 0.5 * dx * ti.Vector([idx, idy, idz]) + rand_dpos)
@@ -149,45 +150,45 @@ def Initiate():
             rot_y = ti.Matrix([[tm.sqrt(2)/2, 0, tm.sqrt(2)/2], [0, 1, 0], [-tm.sqrt(2)/2, 0, tm.sqrt(2)/2]]) 
             pos_particle[i] = rot_y @ rot_x @ pos_particle[i]
             pos_particle[i] = pos_particle[i] + base + 5 * ti.Vector([dx, dx, dx])
-        elif benchmark == 2:
-            if i < n_particle // 2:
-                idx = (i % (cube_len * cube_len)) // cube_len
-                idy = (i % (cube_len * cube_len)) % cube_len
-                idz = i // (cube_len * cube_len)
+        # elif benchmark == 2:
+        #     if i < n_particle // 2:
+        #         idx = (i % (cube_len * cube_len)) // cube_len
+        #         idy = (i % (cube_len * cube_len)) % cube_len
+        #         idz = i // (cube_len * cube_len)
 
-                base = ti.Vector([1.0, 1.0, 0.75])
-                # rand_dpos = ti.Vector([ti.random(float)-0.5, ti.random(float)-0.5, ti.random(float)-0.5]) * 0.05
-                rand_dpos = ti.Vector([0, 0, 0])
-                pos_particle[i] = (base + 0.5 * dx * ti.Vector([idx, idy, idz]) + rand_dpos)
-                vel_particle[i] = ti.Vector([4, 4, 1])
-                F_particle[i] = ti.Matrix.identity(float, 3)
-                C_particle[i] = ti.Matrix.zero(float, 3, 3)
+        #         base = ti.Vector([1.0, 1.0, 0.75])
+        #         # rand_dpos = ti.Vector([ti.random(float)-0.5, ti.random(float)-0.5, ti.random(float)-0.5]) * 0.05
+        #         rand_dpos = ti.Vector([0, 0, 0])
+        #         pos_particle[i] = (base + 0.5 * dx * ti.Vector([idx, idy, idz]) + rand_dpos)
+        #         vel_particle[i] = ti.Vector([4, 4, 1])
+        #         F_particle[i] = ti.Matrix.identity(float, 3)
+        #         C_particle[i] = ti.Matrix.zero(float, 3, 3)
 
-                pos_particle[i] = pos_particle[i] - base - 5 * ti.Vector([dx, dx, dx])
-                rot_x = ti.Matrix([[1, 0, 0], [0, 0.5, tm.sqrt(3)/2], [0, -tm.sqrt(3)/2, 0.5]]) 
-                rot_y = ti.Matrix([[tm.sqrt(3)/2, 0, 0.5], [0, 1, 0], [-0.5, 0, tm.sqrt(3)/2]]) 
-                pos_particle[i] = rot_y @ rot_x @ pos_particle[i]
-                pos_particle[i] = pos_particle[i] + base + 5 * ti.Vector([dx, dx, dx])
-            else:
-                j = i - n_particle // 2
-                idx = (j % (cube_len * cube_len)) // cube_len
-                idy = (j % (cube_len * cube_len)) % cube_len
-                idz = j // (cube_len * cube_len)
+        #         pos_particle[i] = pos_particle[i] - base - 5 * ti.Vector([dx, dx, dx])
+        #         rot_x = ti.Matrix([[1, 0, 0], [0, 0.5, tm.sqrt(3)/2], [0, -tm.sqrt(3)/2, 0.5]]) 
+        #         rot_y = ti.Matrix([[tm.sqrt(3)/2, 0, 0.5], [0, 1, 0], [-0.5, 0, tm.sqrt(3)/2]]) 
+        #         pos_particle[i] = rot_y @ rot_x @ pos_particle[i]
+        #         pos_particle[i] = pos_particle[i] + base + 5 * ti.Vector([dx, dx, dx])
+        #     else:
+        #         j = i - n_particle // 2
+        #         idx = (j % (cube_len * cube_len)) // cube_len
+        #         idy = (j % (cube_len * cube_len)) % cube_len
+        #         idz = j // (cube_len * cube_len)
 
-                base = ti.Vector([2.2, 2.2, 0.8])
-                # rand_dpos = ti.Vector([ti.random(float)-0.5, ti.random(float)-0.5, ti.random(float)-0.5]) * 0.05
-                rand_dpos = ti.Vector([0, 0, 0])
-                pos_particle[i] = (base + 0.5 * dx * ti.Vector([idx, idy, idz]) + rand_dpos)
-                vel_particle[i] = ti.Vector([-4, -4, 1])
-                F_particle[i] = ti.Matrix.identity(float, 3)
-                C_particle[i] = ti.Matrix.zero(float, 3, 3)
+        #         base = ti.Vector([2.2, 2.2, 0.8])
+        #         # rand_dpos = ti.Vector([ti.random(float)-0.5, ti.random(float)-0.5, ti.random(float)-0.5]) * 0.05
+        #         rand_dpos = ti.Vector([0, 0, 0])
+        #         pos_particle[i] = (base + 0.5 * dx * ti.Vector([idx, idy, idz]) + rand_dpos)
+        #         vel_particle[i] = ti.Vector([-4, -4, 1])
+        #         F_particle[i] = ti.Matrix.identity(float, 3)
+        #         C_particle[i] = ti.Matrix.zero(float, 3, 3)
 
-                pos_particle[i] = pos_particle[i] - base - 5 * ti.Vector([dx, dx, dx])
-                rot_x = ti.Matrix([[1, 0, 0], [0, 0.5, tm.sqrt(3)/2], [0, -tm.sqrt(3)/2, 0.5]]) 
-                cos45 = tm.sqrt(2) / 2
-                rot_y = ti.Matrix([[cos45, 0, cos45], [0, 1, 0], [-cos45, 0, cos45]]) 
-                pos_particle[i] = rot_y @ rot_x @ pos_particle[i]
-                pos_particle[i] = pos_particle[i] + base + 5 * ti.Vector([dx, dx, dx])
+        #         pos_particle[i] = pos_particle[i] - base - 5 * ti.Vector([dx, dx, dx])
+        #         rot_x = ti.Matrix([[1, 0, 0], [0, 0.5, tm.sqrt(3)/2], [0, -tm.sqrt(3)/2, 0.5]]) 
+        #         cos45 = tm.sqrt(2) / 2
+        #         rot_y = ti.Matrix([[cos45, 0, cos45], [0, 1, 0], [-cos45, 0, cos45]]) 
+        #         pos_particle[i] = rot_y @ rot_x @ pos_particle[i]
+        #         pos_particle[i] = pos_particle[i] + base + 5 * ti.Vector([dx, dx, dx])
 
 
 @ti.kernel
@@ -354,7 +355,7 @@ def DivideVel():
             grid_vel[x, y, z] /= grid_mass[x, y, z]
 
 
-optimizer = Newton(ComputeEnergy, ComputeGrad, ComputeHessian, dim=3*nx*ny*nz, alpha=0.01, eta=0.1)
+optimizer = GradientDesent(ComputeEnergy, ComputeGrad, dim=3*nx*ny*nz, c1=0.01, eta=0.1)
 
 
 @ti.kernel
