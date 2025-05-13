@@ -44,10 +44,10 @@ class GradientDesent:
             for i in range(self.dim):
                 self.temp_x[i] = self.x[i] + a * d[i]
 
-        while alpha > 1e-6:
+        while alpha > 1e-8:
             update_temp(alpha, self.d)
             f_new = self.energy_fn(self.temp_x)
-            if f_new <= self.f0 + self.c1 * alpha * g0:
+            if f_new <= self.f0:
                 break
             alpha *= self.beta
         return alpha
@@ -86,6 +86,7 @@ class GradientDesent:
 
             # 线搜索
             alpha = self.line_search()
+            # alpha = 0.0001
             print(f"Step size: {alpha:.4e}")
 
             # 更新参数

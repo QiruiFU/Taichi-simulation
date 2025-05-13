@@ -142,7 +142,7 @@ class LBFGS:
             f_new = self.energy_fn(self.temp_x)
             self.grad_fn(self.temp_x, self.temp_grad)
 
-            if f_new <= f0 + self.alpha * alpha * g0:
+            if f_new < f0:
                 break
             alpha *= self.beta
         return alpha
@@ -203,7 +203,7 @@ class LBFGS:
 
             # 线搜索
             alpha = self.line_search()
-            # print(f"Alpha: {alpha}")
+            print(f"Alpha: {alpha}")
 
             # 保存旧状态
             self.x_old.copy_from(self.x)
@@ -272,10 +272,10 @@ if __name__ == "__main__":
                 grad[i+2] = 18*(x3 - x1 - x2**2)
 
     # 初始化参数
-    x_init = np.zeros(dim, dtype=np.float32)
+    x_init = np.random.rand(dim)
     lbfgs = LBFGS(rosenbrock_energy, rosenbrock_grad, dim=dim)
     lbfgs.x.from_numpy(x_init)
     
     # 运行优化
-    lbfgs.minimize(max_iter=200)
+    lbfgs.minimize(max_iter=20000)
     print("Optimized x:", lbfgs.x.to_numpy())

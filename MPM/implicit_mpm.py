@@ -8,12 +8,12 @@ from Gradient import GradientDesent
 ti.init(arch=ti.gpu)
 
 visualization = 0
-implicit = False
+implicit = True
 benchmark = 1
 
 n_particle = 20 ** 3
 nx = ny = 30
-nz = 20 
+nz = 30 
 
 dx = 1 / 16
 lenx, leny, lenz = nx * dx, ny * dx, nz * dx
@@ -40,6 +40,20 @@ grid_vel = ti.Vector.field(3, float, shape = (nx, ny, nz))
 grid_vstar = ti.Vector.field(3, float, shape = (nx, ny, nz))
 grid_mass = ti.field(float, shape = (nx, ny, nz))
 
+
+bd_x_idx = ti.field(int, shape = 6)
+bd_y_idx = ti.field(int, shape = 6)
+bd_z_idx = ti.field(int, shape = 6)
+
+bd_x_idx.from_numpy(np.array([0, 1, 2, nx-3, nx-2, nx-1]))
+bd_y_idx.from_numpy(np.array([0, 1, 2, ny-3, ny-2, ny-1]))
+bd_z_idx.from_numpy(np.array([0, 1, 2, nz-3, nz-2, nz-1]))
+
+
+pos_vertex = ti.Vector.field(3, float, shape=4) # floor
+pos_vertex.from_numpy(np.array([[2, 2, 0], [2, -2, -0], [-2, 2, 0], [-1, -1, 0]]))
+indice = ti.field(int, shape = 6)
+indice.from_numpy(np.array([0, 1, 2, 2, 1, 3]))
 
 @ti.func
 def N(x):
@@ -129,6 +143,7 @@ def CalVelGradParticle(vel, p):
 
 @ti.kernel
 def Initiate():
+
     for i in pos_particle:
         cube_len = 20
 
@@ -193,13 +208,34 @@ def Initiate():
 
 @ti.kernel
 def ComputeEnergy(v: ti.template()) -> float:
+    for idx, j, k in ti.ndrange(6, ny, nz):
+        i = bd_x_idx[idx]
+        idx_grid = GridIdx(i, j, k)
+        v[idx_grid * 3 + 0] = 0
+        v[idx_grid * 3 + 1] = 0
+        v[idx_grid * 3 + 2] = 0
+
+    for i, idx, k in ti.ndrange(nx, 6, nz):
+        j = bd_y_idx[idx]
+        idx_grid = GridIdx(i, j, k)
+        v[idx_grid * 3 + 0] = 0
+        v[idx_grid * 3 + 1] = 0
+        v[idx_grid * 3 + 2] = 0
+
+    for i, j, idx in ti.ndrange(nx, ny, 6):
+        k = bd_z_idx[idx]
+        idx_grid = GridIdx(i, j, k)
+        v[idx_grid * 3 + 0] = 0
+        v[idx_grid * 3 + 1] = 0
+        v[idx_grid * 3 + 2] = 0
+
     total_energy = 0.0
 
     for p in vel_particle:
         grad_vel = CalVelGradParticle(v, p)
 
         # compute potential energy
-        new_F = (ti.Matrix.identity(float, 3) + grad_vel) @ F_particle[p]
+        new_F = (ti.Matrix.identity(float, 3) + grad_vel * dt) @ F_particle[p]
         new_J = new_F.determinant()
 
         term1 = 0.5 * miu_0 * ((new_F.transpose() @ new_F).trace() - 3)
@@ -218,13 +254,34 @@ def ComputeEnergy(v: ti.template()) -> float:
 
 
 @ti.kernel
-def ComputeGrad(v: ti.template(),  grad: ti.template()):
+def ComputeGrad(v: ti.template(), grad: ti.template()):
     grad.fill(0.0)
+
+    for idx, j, k in ti.ndrange(6, ny, nz):
+        i = bd_x_idx[idx]
+        idx_grid = GridIdx(i, j, k)
+        v[idx_grid * 3 + 0] = 0
+        v[idx_grid * 3 + 1] = 0
+        v[idx_grid * 3 + 2] = 0
+
+    for i, idx, k in ti.ndrange(nx, 6, nz):
+        j = bd_y_idx[idx]
+        idx_grid = GridIdx(i, j, k)
+        v[idx_grid * 3 + 0] = 0
+        v[idx_grid * 3 + 1] = 0
+        v[idx_grid * 3 + 2] = 0
+
+    for i, j, idx in ti.ndrange(nx, ny, 6):
+        k = bd_z_idx[idx]
+        idx_grid = GridIdx(i, j, k)
+        v[idx_grid * 3 + 0] = 0
+        v[idx_grid * 3 + 1] = 0
+        v[idx_grid * 3 + 2] = 0
 
     for p in vel_particle:
         grad_vel = CalVelGradParticle(v, p)
         F = F_particle[p]
-        new_F = (ti.Matrix.identity(float, 3) + grad_vel) @ F_particle[p]
+        new_F = (ti.Matrix.identity(float, 3) + grad_vel * dt) @ F_particle[p]
         new_J = new_F.determinant()
 
         stress = miu_0 * (new_F - new_F.inverse().transpose()) + lambda_0 * tm.log(new_J) * new_F.inverse().transpose()
@@ -267,6 +324,27 @@ def ComputeGrad(v: ti.template(),  grad: ti.template()):
 
 @ti.kernel
 def ComputeHessian(v: ti.template(),  hessian: ti.sparse_matrix_builder()):
+    for idx, j, k in ti.ndrange(6, ny, nz):
+        i = bd_x_idx[idx]
+        idx_grid = GridIdx(i, j, k)
+        optimizer.x[idx_grid * 3 + 0] = 0
+        optimizer.x[idx_grid * 3 + 1] = 0
+        optimizer.x[idx_grid * 3 + 2] = 0
+
+    for i, idx, k in ti.ndrange(nx, 6, nz):
+        j = bd_y_idx[idx]
+        idx_grid = GridIdx(i, j, k)
+        optimizer.x[idx_grid * 3 + 0] = 0
+        optimizer.x[idx_grid * 3 + 1] = 0
+        optimizer.x[idx_grid * 3 + 2] = 0
+
+    for i, j, idx in ti.ndrange(nx, ny, 6):
+        k = bd_z_idx[idx]
+        idx_grid = GridIdx(i, j, k)
+        optimizer.x[idx_grid * 3 + 0] = 0
+        optimizer.x[idx_grid * 3 + 1] = 0
+        optimizer.x[idx_grid * 3 + 2] = 0
+
     for p in vel_particle:
         grad_vel = CalVelGradParticle(v, p)
         F = F_particle[p]
@@ -355,7 +433,8 @@ def DivideVel():
             grid_vel[x, y, z] /= grid_mass[x, y, z]
 
 
-optimizer = GradientDesent(ComputeEnergy, ComputeGrad, dim=3*nx*ny*nz, c1=0.01, eta=0.1)
+# optimizer = GradientDesent(ComputeEnergy, ComputeGrad, dim=3*nx*ny*nz, c1=0.9, eta=1.0)
+optimizer = LBFGS(ComputeEnergy, ComputeGrad, dim=3*nx*ny*nz, beta=0.9, eta=0.1)
 
 
 @ti.kernel
@@ -378,16 +457,38 @@ def ExplicitUpdate():
                 grid_vel[center[0]+i, center[1]+j, center[2]+k] += (-4.0 * p_vol_0 * dt * stress @ F.transpose() * weight @ dpos / dx**2) / grid_mass[center[0]+i, center[1]+j, center[2]+k]
                 
 
+# @ti.kernel
+# def ModExplicitUpdate():
+#     for p in pos_particle:
+
+#         # compute stress
+#         F = F_particle[p]
+#         J = ti.Matrix.determinant(F_particle[p])
+
+#         stress = miu_0 * (F - F.inverse().transpose()) + lambda_0 * tm.log(J) * F.inverse().transpose()
+
+#         center = int(pos_particle[p] / dx) # index of center grid
+#         for i, j, k in ti.ndrange((-1, 2), (-1, 2), (-1, 2)):
+#             grid_pos = float(center + ti.Vector([0.5, 0.5, 0.5]) + ti.Vector([i, j, k])) * dx
+#             if InDomain(grid_pos):
+#                 dpos = grid_pos - pos_particle[p]
+#                 weight = N(dpos[0] / dx) * N(dpos[1] / dx) * N(dpos[2] / dx)
+#                 # grid_vel[center[0]+i, center[1]+j, center[2]+k] += (-4.0 * p_vol_0 * dt * stress @ F.transpose() * weight @ dpos / dx**2) / grid_mass[center[0]+i, center[1]+j, center[2]+k]
+#                 dv = (-4.0 * p_vol_0 * dt * stress @ F.transpose() * weight @ dpos / dx**2) / grid_mass[center[0]+i, center[1]+j, center[2]+k]
+#                 idx = GridIdx(center[0]+i, center[1]+j, center[2]+k)
+#                 optimizer.x[idx * 3 + 0] += dv[0]
+#                 optimizer.x[idx * 3 + 1] += dv[1]
+#                 optimizer.x[idx * 3 + 2] += dv[2]
+
 
 def UpdateGrid():
     DivideVel()
     ApplyGravity()
     
     if implicit:
-        # grid_vel_np = np.zeros(3*nx*ny*nz)
-        # StrechVec(grid_vel, grid_vel_np)
         optimizer.x.from_numpy(grid_vel.to_numpy().reshape(-1))
-        optimizer.minimize(max_iter=1000)
+        # ModExplicitUpdate()
+        optimizer.minimize(max_iter=1000000)
         grid_vel.from_numpy(optimizer.x.to_numpy().reshape(nx, ny, nz, 3))
     else:
         ExplicitUpdate()
@@ -477,6 +578,7 @@ def main():
             scene.point_light(pos=(2, 2, 2), color=(0.7, 0.7, 0.7))
             scene.point_light(pos=(-1, -1, 2), color=(0.7, 0.7, 0.7))
             scene.set_camera(camera)
+            scene.mesh(pos_vertex, indice, color=(1, 1, 1))
             canvas.scene(scene)
             gui.show()
             cur_frame += 1
