@@ -24,7 +24,7 @@ class GradientDesent:
         self.time_his = []
 
     def line_search(self):
-        alpha = 1.0
+        alpha = 100.0
             
         @ti.kernel
         def calc_g0(d:ti.template()) -> float:
@@ -44,7 +44,7 @@ class GradientDesent:
             for i in range(self.dim):
                 self.temp_x[i] = self.x[i] + a * d[i]
 
-        while alpha > 1e-8:
+        while alpha > 1e-6:
             update_temp(alpha, self.d)
             f_new = self.energy_fn(self.temp_x)
             if f_new <= self.f0:
@@ -54,7 +54,6 @@ class GradientDesent:
 
 
     def minimize(self, max_iter=200):
-        start_time = time.time()
         for it in range(max_iter):
             # 计算当前能量和梯度
             self.grad_fn(self.x, self.grad)

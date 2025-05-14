@@ -142,7 +142,7 @@ class LBFGS:
             f_new = self.energy_fn(self.temp_x)
             self.grad_fn(self.temp_x, self.temp_grad)
 
-            if f_new < f0:
+            if f_new < self.alpha * f0:
                 break
             alpha *= self.beta
         return alpha
