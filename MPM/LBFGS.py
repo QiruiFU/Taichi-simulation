@@ -157,6 +157,8 @@ class LBFGS:
         self.grad_old.copy_from(self.grad)
 
         total_iteration = 0
+
+        cnt_line_failed = 0
         for k in range(max_iter):
             total_iteration += 1
             f = self.energy_fn(self.x)
@@ -174,7 +176,7 @@ class LBFGS:
             
             grad_n = grad_norm()
             print(f"Grad norm: {grad_n}")
-            if grad_n < self.eta:
+            if grad_n < self.eta or cnt_line_failed > 20:
                 print(f"Converged at iteration {k}")
                 break
 
@@ -204,6 +206,8 @@ class LBFGS:
             # 线搜索
             alpha = self.line_search()
             print(f"Alpha: {alpha}")
+            if alpha < 1e-6:
+                cnt_line_failed += 1
 
             # 保存旧状态
             self.x_old.copy_from(self.x)
@@ -245,9 +249,9 @@ class LBFGS:
 
 # 测试示例（与BFGS相同）
 if __name__ == "__main__":
-    dim = 3
+    dim = 30
 
-    ti.init(arch=ti.gpu)
+    ti.init(arch=ti.gpu, debug=True)
 
     @ti.kernel
     def rosenbrock_energy(x: ti.template()) -> ti.f32:
@@ -272,10 +276,16 @@ if __name__ == "__main__":
                 grad[i+2] = 18*(x3 - x1 - x2**2)
 
     # 初始化参数
-    x_init = np.random.rand(dim)
-    lbfgs = LBFGS(rosenbrock_energy, rosenbrock_grad, dim=dim)
-    lbfgs.x.from_numpy(x_init)
+    lbfgs = LBFGS(rosenbrock_energy, rosenbrock_grad, alpha=1.0, beta=0.9, dim=dim)
     
     # 运行优化
+    # x_init = np.zeros(dim, dtype=float)
+    x_init = np.random.uniform(low=0.0, high=100.0, size=dim)
+    lbfgs.x.from_numpy(x_init)
+    lbfgs.minimize(max_iter=20000)
+    print("Optimized x:", lbfgs.x.to_numpy())
+
+    x_init = np.random.uniform(low=0.0, high=100.0, size=dim)
+    lbfgs.x.from_numpy(x_init)
     lbfgs.minimize(max_iter=20000)
     print("Optimized x:", lbfgs.x.to_numpy())

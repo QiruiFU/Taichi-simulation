@@ -12,42 +12,45 @@ class GradientDesent:
         self.beta = beta
         self.eta = eta
 
-        # 参数和梯度存储
         self.x = ti.field(float, shape=dim)
         self.grad = ti.field(float, shape=dim)
         self.temp_x = ti.field(float, shape=dim)
         self.d = ti.field(float, shape=dim)
         self.f0 = 0.0
 
-        # 历史记录
-        self.f_his = []
-        self.time_his = []
+
+    @ti.kernel
+    def update_temp(self, a: float):
+        for i in range(self.dim):
+            self.temp_x[i] = self.x[i] + a * self.d[i]
+
+
+    @ti.kernel
+    def grad_inf_norm(self) -> float:
+        res = 0.0
+        for i in range(self.dim):
+            ti.atomic_max(res, ti.abs(self.grad[i]))
+        return res
+
+
+    @ti.kernel
+    def set_direction(self):
+        for val in self.grad:
+            self.d[val] = -self.grad[val]
+
+
+    @ti.kernel
+    def update_x(self, alpha: float):
+        for i in range(self.dim):
+            self.x[i] += alpha * self.d[i]
+
 
     def line_search(self):
-        alpha = 100.0
-            
-        @ti.kernel
-        def calc_g0(d:ti.template()) -> float:
-            g = 0.0
-            for i in range(self.dim):
-                g += self.grad[i] * d[i]
-            return g
-        
-        g0 = calc_g0(self.d)
-
-        if g0 >= 0:
-            print("Warning: Not a descent direction! g0:", g0)
-            return 0.0
-
-        @ti.kernel
-        def update_temp(a: float, d :ti.template()):
-            for i in range(self.dim):
-                self.temp_x[i] = self.x[i] + a * d[i]
-
+        alpha = 1.0
         while alpha > 1e-6:
-            update_temp(alpha, self.d)
+            self.update_temp(alpha)
             f_new = self.energy_fn(self.temp_x)
-            if f_new <= self.f0:
+            if f_new <= self.f0 * self.c1:
                 break
             alpha *= self.beta
         return alpha
@@ -55,51 +58,29 @@ class GradientDesent:
 
     def minimize(self, max_iter=200):
         for it in range(max_iter):
-            # 计算当前能量和梯度
+            # compute energy & gradient
             self.grad_fn(self.x, self.grad)
             self.f0 = self.energy_fn(self.x)
 
-            print(f"Iteration {it}, Energy: {self.f0:.4e}")
+            # print(f"Iteration {it}, Energy: {self.f0:.4e}")
 
             # 检查收敛
-            @ti.kernel
-            def grad_inf_norm() -> float:
-                n = 0.0
-                for i in range(self.dim):
-                    ti.atomic_max(n, ti.abs(self.grad[i]))
-                return n
-            
-            g_norm = grad_inf_norm()
-            print(f"Grad norm: {g_norm:.4e}")
+            g_norm = self.grad_inf_norm()
+            # print(f"Grad norm: {g_norm:.4e}")
             if g_norm < self.eta:
-                print(f"Converged at iteration {it}")
+                # print(f"Converged at iteration {it}")
                 break
 
-            
-            @ti.kernel
-            def set_direction():
-                for val in self.grad:
-                    self.d[val] = -self.grad[val]
-
-            set_direction()
-
-            # 线搜索
+            self.set_direction()
             alpha = self.line_search()
-            # alpha = 0.0001
-            print(f"Step size: {alpha:.4e}")
-
-            # 更新参数
-            @ti.kernel
-            def update_x(a: float, d: ti.template()):
-                for i in range(self.dim):
-                    self.x[i] += a * d[i]
-            update_x(alpha, self.d)
+            # print(f"Step size: {alpha:.4e}")
+            self.update_x(alpha)
 
 
 # 示例使用
 if __name__ == "__main__":
     ti.init(arch=ti.gpu)
-    dim = 3000
+    dim = 30
 
     @ti.kernel
     def quadratic_energy(x: ti.template()) -> float:
@@ -121,7 +102,7 @@ if __name__ == "__main__":
     @ti.kernel
     def rosenbrock(x: ti.template()) -> float:
         f_total = 0.0
-        for i in range(x.shape[0]):
+        for i in x:
             if i % 3 == 0:
                 x1, x2, x3 = x[i], x[i+1], x[i+2]
                 f_total += (3 - x1)**2 + 7*(x2 - x1**2)**2 + 9*(x3 - x1 - x2**2)**2
@@ -129,26 +110,26 @@ if __name__ == "__main__":
 
     
     @ti.kernel
-    def rosenbrock_grad(x: ti.template(), grad: ti.template()) -> float:
-        f_total = 0.0
-        for i in range(x.shape[0]):
+    def rosenbrock_grad(x: ti.template(), grad: ti.template()):
+        for i in x:
             if i % 3 == 0:
                 x1, x2, x3 = x[i], x[i+1], x[i+2]
-                # 能量计算
-                f_total += (3 - x1)**2 + 7*(x2 - x1**2)**2 + 9*(x3 - x1 - x2**2)**2
                 # 梯度计算
                 grad[i] = 2*(x1 - 3) + 28*(x1**2 - x2)*x1 + 18*(-x3 + x1 + x2**2)
                 grad[i+1] = 14*(x2 - x1**2) + 18*(x3 - x1 - x2**2)*(-2*x2)
                 grad[i+2] = 18*(x3 - x1 - x2**2)
-        return f_total
+
 
     optimizer = GradientDesent(energy_fn=rosenbrock,
                       grad_fn=rosenbrock_grad,
+                      c1 = 1.0,
+                      beta = 0.9,
                       dim=dim)
     
-    x_np = np.random.rand(dim)
+    # x_init = np.random.uniform(low=0.0, high=100.0, size=dim)
+    x_init = np.zeros(dim)
     # 设置初始值
-    optimizer.x.from_numpy(x_np)
+    optimizer.x.from_numpy(x_init)
     
     # 梯度检查
     # optimizer.check_gradient()
