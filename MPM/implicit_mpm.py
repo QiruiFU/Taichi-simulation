@@ -8,7 +8,7 @@ from Gradient import GradientDesent
 ti.init(arch=ti.gpu)
 
 visualization = 1
-implicit = False
+implicit = True
 benchmark = 1
 
 n_particle = 10 ** 3
@@ -260,6 +260,27 @@ def ComputeEnergy(v: ti.template()) -> float:
             del_v = v_vel - grid_vel[x, y, z]
             total_energy[None] += 0.5 * grid_mass[x, y, z] * (tm.dot(del_v, del_v))
     
+    # for idx, j, k in ti.ndrange(6, ny, nz):
+    #     i = bd_x_idx[idx]
+    #     idx_grid = GridIdx(i, j, k)
+    #     v[idx_grid * 3 + 0] = 0
+    #     v[idx_grid * 3 + 1] = 0
+    #     v[idx_grid * 3 + 2] = 0
+
+    # for i, idx, k in ti.ndrange(nx, 6, nz):
+    #     j = bd_y_idx[idx]
+    #     idx_grid = GridIdx(i, j, k)
+    #     v[idx_grid * 3 + 0] = 0
+    #     v[idx_grid * 3 + 1] = 0
+    #     v[idx_grid * 3 + 2] = 0
+
+    # for i, j, idx in ti.ndrange(nx, ny, 6):
+    #     k = bd_z_idx[idx]
+    #     idx_grid = GridIdx(i, j, k)
+    #     v[idx_grid * 3 + 0] = 0
+    #     v[idx_grid * 3 + 1] = 0
+    #     v[idx_grid * 3 + 2] = 0
+
     return total_energy[None]
 
 
@@ -326,6 +347,27 @@ def ComputeGrad(v: ti.template(), grad: ti.template()):
             grad[idx * 3 + 0] += grid_grad[0]
             grad[idx * 3 + 1] += grid_grad[1]
             grad[idx * 3 + 2] += grid_grad[2]
+
+    for idx, j, k in ti.ndrange(6, ny, nz):
+        i = bd_x_idx[idx]
+        idx_grid = GridIdx(i, j, k)
+        grad[idx_grid * 3 + 0] = 0
+        grad[idx_grid * 3 + 1] = 0
+        grad[idx_grid * 3 + 2] = 0
+
+    for i, idx, k in ti.ndrange(nx, 6, nz):
+        j = bd_y_idx[idx]
+        idx_grid = GridIdx(i, j, k)
+        grad[idx_grid * 3 + 0] = 0
+        grad[idx_grid * 3 + 1] = 0
+        grad[idx_grid * 3 + 2] = 0
+
+    for i, j, idx in ti.ndrange(nx, ny, 6):
+        k = bd_z_idx[idx]
+        idx_grid = GridIdx(i, j, k)
+        grad[idx_grid * 3 + 0] = 0
+        grad[idx_grid * 3 + 1] = 0
+        grad[idx_grid * 3 + 2] = 0
 
 
 @ti.kernel
@@ -410,7 +452,7 @@ def ModExplicitUpdate(optimizerx: ti.template()):
                 optimizerx[idx * 3 + 2] += dv[2]
 
 
-# optimizer = LBFGS(ComputeEnergy, ComputeGrad, dim=3*nx*ny*nz, alpha=1, beta=0.9, eta=0.01)
+# optimizer = LBFGS(ComputeEnergy, ComputeGrad, dim=3*nx*ny*nz, alpha=1.0, beta=0.95, eta=0.003)
 optimizer = GradientDesent(ComputeEnergy, ComputeGrad, dim=3*nx*ny*nz, c1=1.0, beta=0.9, eta=0.0030)
 
 
@@ -441,7 +483,7 @@ def UpdateGrid():
     if implicit:
         optimizer.x.from_numpy(grid_vel.to_numpy().reshape(-1))
         # ModExplicitUpdate(optimizer.x)
-        optimizer.minimize(max_iter=20000)
+        optimizer.minimize(max_iter=2000)
         grid_vel.from_numpy(optimizer.x.to_numpy().reshape(nx, ny, nz, 3))
     else:
         ExplicitUpdate()
@@ -538,7 +580,7 @@ def main():
             gui.show()
         else:
             np_pos = pos_particle.to_numpy() * 10
-            series_prefix = "out/explicit/explicit.ply"
+            series_prefix = "out/implicit/implicit.ply"
             writer = ti.tools.PLYWriter(num_vertices = n_particle)
             writer.add_vertex_pos(np_pos[:n_particle, 0], np_pos[:n_particle, 1], np_pos[:n_particle, 2])
             writer.add_vertex_color(np.full(n_particle, 0.8), np.full(n_particle, 0.8), np.full(n_particle, 0.8))

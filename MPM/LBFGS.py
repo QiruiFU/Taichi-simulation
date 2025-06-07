@@ -110,6 +110,7 @@ class LBFGS:
             self.s[i, idx] = s_temp[i]
             self.y[i, idx] = y_temp[i]
 
+
     @ti.kernel
     def compute_gamma_k(self, s_temp: ti.template(), y_temp: ti.template()) -> ti.f32:
         s_dot_y = 0.0
@@ -119,26 +120,47 @@ class LBFGS:
             y_dot_y += y_temp[i] * y_temp[i]
         return s_dot_y / y_dot_y if y_dot_y != 0 else 1.0
 
+
+    @ti.kernel
+    def update_temp_x(self, a: ti.f32):
+        for i in range(self.dim):
+            self.temp_x[i] = self.x[i] + a * self.d[i]
+
+
+    @ti.kernel
+    def grad_norm(self) -> ti.f32:
+        n = 0.0
+        for i in range(self.dim):
+            n += self.grad[i] ** 2
+        return ti.sqrt(n)
+
+
+    @ti.kernel
+    def set_d(self):
+        for i in range(self.dim):
+            self.d[i] = -self.q[i]
+
+
+    @ti.kernel
+    def compute_s_y(self, s_temp: ti.template(), y_temp: ti.template()):
+        for i in range(self.dim):
+            s_temp[i] = self.x[i] - self.x_old[i]
+            y_temp[i] = self.grad[i] - self.grad_old[i]
+
+
+    @ti.kernel
+    def update_x(self, alpha: ti.f32):
+        for i in range(self.dim):
+            self.x[i] += alpha * self.d[i]
+
+
     def line_search(self) -> ti.f32:
         alpha = 1.0
         f0 = self.energy_fn(self.x)
         self.grad_fn(self.x, self.grad)
-        
-        @ti.kernel
-        def calc_g0() -> ti.f32:
-            g = 0.0
-            for i in range(self.dim):
-                g += self.grad[i] * self.d[i]
-            return g
-        g0 = calc_g0()
-
-        @ti.kernel
-        def update_temp_x(a: ti.f32):
-            for i in range(self.dim):
-                self.temp_x[i] = self.x[i] + a * self.d[i]
 
         while alpha > 1e-6:
-            update_temp_x(alpha)
+            self.update_temp_x(alpha)
             f_new = self.energy_fn(self.temp_x)
             self.grad_fn(self.temp_x, self.temp_grad)
 
@@ -166,15 +188,7 @@ class LBFGS:
             self.f_his.append(f)
             print(f"Iteration {k}: Energy = {f}")
 
-            # 检查梯度收敛
-            @ti.kernel
-            def grad_norm() -> ti.f32:
-                n = 0.0
-                for i in range(self.dim):
-                    n += self.grad[i] ** 2
-                return ti.sqrt(n)
-            
-            grad_n = grad_norm()
+            grad_n = self.grad_norm()
             print(f"Grad norm: {grad_n}")
             if grad_n < self.eta or cnt_line_failed > 20:
                 print(f"Converged at iteration {k}")
@@ -197,11 +211,7 @@ class LBFGS:
                 self.gamma_k[None] = 1.0
 
             # 设置搜索方向d为负q
-            @ti.kernel
-            def set_d():
-                for i in range(self.dim):
-                    self.d[i] = -self.q[i]
-            set_d()
+            self.set_d()
 
             # 线搜索
             alpha = self.line_search()
@@ -213,26 +223,15 @@ class LBFGS:
             self.x_old.copy_from(self.x)
             self.grad_old.copy_from(self.grad)
 
-            # 更新x
-            @ti.kernel
-            def update_x(alpha: ti.f32):
-                for i in range(self.dim):
-                    self.x[i] += alpha * self.d[i]
-            update_x(alpha)
+            self.update_x(alpha)
 
             # 计算新梯度
             self.grad_fn(self.x, self.grad)
 
             # 计算s和y
-            @ti.kernel
-            def compute_s_y(s_temp: ti.template(), y_temp: ti.template()):
-                for i in range(self.dim):
-                    s_temp[i] = self.x[i] - self.x_old[i]
-                    y_temp[i] = self.grad[i] - self.grad_old[i]
-            
             s_temp = ti.field(ti.f32, self.dim)
             y_temp = ti.field(ti.f32, self.dim)
-            compute_s_y(s_temp, y_temp)
+            self.compute_s_y(s_temp, y_temp)
 
             # 更新gamma_k
             gamma_k = self.compute_gamma_k(s_temp, y_temp)
